@@ -308,7 +308,7 @@ class App :
                 memoryCache {
                     MemoryCache
                         .Builder()
-                        .maxSizePercent(context, 0.15)
+                        .maxSizePercent(context, 0.08)
                         .build()
                 }
                 if (cacheSize == 0) {
@@ -325,6 +325,26 @@ class App :
                     networkCachePolicy(CachePolicy.ENABLED)
                 }
             }.build()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val imageLoader = SingletonImageLoader.get(this)
+        when {
+            level >= TRIM_MEMORY_UI_HIDDEN -> {
+                imageLoader.memoryCache?.clear()
+            }
+            level >= TRIM_MEMORY_RUNNING_LOW -> {
+                imageLoader.memoryCache?.let { cache ->
+                    cache.trimToSize(cache.size / 2)
+                }
+            }
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        SingletonImageLoader.get(this).memoryCache?.clear()
     }
 
     companion object {

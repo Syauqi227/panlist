@@ -1316,12 +1316,11 @@ class MusicService :
                 )
                 .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, useAudioTrackPlaybackParams))
                 .setLoadControl(
-                    // Start playback once ~750ms is buffered (media3's default is 1000ms) so first
-                    // audio is audible a touch sooner. min/max/after-rebuffer match the media3 1.x
-                    // defaults (50s / 50s / 2000ms) so buffering and post-stall recovery are unchanged.
                     DefaultLoadControl
                         .Builder()
-                        .setBufferDurationsMs(50_000, 50_000, 750, 2_000)
+                        .setBufferDurationsMs(15_000, 30_000, 750, 2_000)
+                        .setTargetBufferBytes(2 * 1024 * 1024)
+                        .setPrioritizeTimeOverSizeThresholds(false)
                         .build(),
                 )
                 .setHandleAudioBecomingNoisy(true)

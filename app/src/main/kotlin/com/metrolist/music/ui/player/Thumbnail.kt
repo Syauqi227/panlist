@@ -623,8 +623,7 @@ private fun ThumbnailImage(
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
-                // Use offscreen compositing for hardware acceleration during animations
-                compositingStrategy = CompositingStrategy.Offscreen
+                compositingStrategy = CompositingStrategy.Auto
             }
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {

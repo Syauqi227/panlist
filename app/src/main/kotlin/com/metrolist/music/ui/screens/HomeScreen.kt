@@ -548,7 +548,7 @@ fun DailyDiscoverCard(
                 model =
                     ImageRequest
                         .Builder(LocalContext.current)
-                        .data(dailyDiscover.recommendation.thumbnail?.resize(1080, 1080))
+                        .data(dailyDiscover.recommendation.thumbnail?.resize(544, 544))
                         .crossfade(true)
                         .build(),
                 contentDescription = null,

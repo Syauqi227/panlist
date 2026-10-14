@@ -856,7 +856,7 @@ fun BottomSheetPlayer(
                                             ImageRequest
                                                 .Builder(context)
                                                 .data(thumbnailUrl)
-                                                .size(100, 100)
+                                                .size(64, 64)
                                                 .allowHardware(false)
                                                 .build(),
                                         contentDescription = null,
@@ -864,7 +864,7 @@ fun BottomSheetPlayer(
                                         modifier =
                                             Modifier
                                                 .fillMaxSize()
-                                                .blur(if (useDarkTheme) 150.dp else 100.dp),
+                                                .blur(if (useDarkTheme) 36.dp else 28.dp),
                                     )
                                     Box(
                                         modifier =
