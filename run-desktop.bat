@@ -1,6 +1,6 @@
 @echo off
-title Metrolist Desktop - Run
-echo Menjalankan Metrolist Desktop...
+title Echo Desktop - Run
+echo Menjalankan Echo Desktop...
 echo.
 call "%~dp0gradlew.bat" :desktop:run
 pause

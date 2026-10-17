@@ -122,6 +122,15 @@ import com.metrolist.desktop.ui.PlaylistView
 import com.metrolist.desktop.ui.NowPlayingView
 import com.metrolist.desktop.ui.DesktopLyricsPageView
 import com.metrolist.desktop.ui.SyncedLyricsView
+import com.metrolist.desktop.cast.DeviceDiscoveryService
+import com.metrolist.desktop.cast.GoogleCastManager
+import com.metrolist.desktop.cast.WindowsCastHelper
+import com.metrolist.desktop.ui.ConnectDeviceFlyout
+import com.metrolist.desktop.ui.UpdateDialog
+import com.metrolist.desktop.ui.SongListSkeleton
+import com.metrolist.desktop.updater.DesktopReleaseInfo
+import com.metrolist.desktop.updater.DesktopUpdater
+import com.metrolist.desktop.discord.DesktopDiscordRpc
 import com.jetbrains.JBR
 import com.jetbrains.WindowDecorations
 import kotlinx.coroutines.delay
@@ -202,7 +211,7 @@ fun main() {
     System.setProperty("sun.awt.noerasebackground", "true")
     if (System.getProperty("os.name")?.contains("Windows", ignoreCase = true) == true) {
         try {
-            com.sun.jna.platform.win32.Shell32.INSTANCE.SetCurrentProcessExplicitAppUserModelID(com.sun.jna.WString("com.metrolist.desktop"))
+            com.sun.jna.platform.win32.Shell32.INSTANCE.SetCurrentProcessExplicitAppUserModelID(com.sun.jna.WString("com.echo.desktop"))
         } catch (_: Throwable) {
         }
     }
@@ -215,7 +224,7 @@ fun main() {
             }
             .diskCache {
                 DiskCache.Builder()
-                    .directory(File(System.getProperty("user.home"), ".metrolist/cache/coil"))
+                    .directory(File(System.getProperty("user.home"), ".echo/cache/coil"))
                     .maxSizeBytes(128 * 1024 * 1024L)
                     .build()
             }
@@ -226,6 +235,14 @@ fun main() {
         val repository = remember { DesktopMusicRepository() }
         val playbackManager = remember { DesktopPlaybackManager(player, repository) }
         val mediaControls = remember { WindowsMediaControls(player, playbackManager) }
+        val discordRpc = remember {
+            DesktopDiscordRpc(
+                player = player,
+                playbackManager = playbackManager,
+                initialClientId = repository.getDiscordAppId(),
+                initialEnabled = repository.isDiscordRpcEnabled(),
+            )
+        }
         val windowState = rememberWindowState(width = 1200.dp, height = 800.dp)
 
         val playerProgress = remember { Animatable(0f) }
@@ -237,8 +254,25 @@ fun main() {
         }
 
         val onClose = {
+            GoogleCastManager.disconnect(sendStop = true)
+            discordRpc.close()
             player.release()
             exitApplication()
+        }
+
+        DisposableEffect(Unit) {
+            val shutdownHook = Thread {
+                try {
+                    GoogleCastManager.disconnect(sendStop = true)
+                    player.release()
+                } catch (_: Throwable) {}
+            }
+            Runtime.getRuntime().addShutdownHook(shutdownHook)
+            onDispose {
+                try {
+                    Runtime.getRuntime().removeShutdownHook(shutdownHook)
+                } catch (_: Throwable) {}
+            }
         }
 
         val appScope = rememberCoroutineScope()
@@ -247,7 +281,7 @@ fun main() {
         Window(
             onCloseRequest = onClose,
             state = windowState,
-            title = "Metrolist Desktop - YouTube Music",
+            title = "Echo - YouTube Music",
             icon = painterResource("icons/icon.png"),
             undecorated = false,
             resizable = true,
@@ -333,6 +367,7 @@ fun main() {
                     player = player,
                     repository = repository,
                     playbackManager = playbackManager,
+                    discordRpc = discordRpc,
                     windowState = windowState,
                     isCurrentlyMaximized = isCurrentlyMaximized,
                     customTitleBar = customTitleBar,
@@ -360,6 +395,7 @@ fun FrameWindowScope.DesktopMainView(
     player: VlcAudioPlayer,
     repository: DesktopMusicRepository,
     playbackManager: DesktopPlaybackManager,
+    discordRpc: DesktopDiscordRpc? = null,
     windowState: WindowState,
     isCurrentlyMaximized: Boolean,
     customTitleBar: WindowDecorations.CustomTitleBar?,
@@ -384,6 +420,28 @@ fun FrameWindowScope.DesktopMainView(
     var songToAddToPlaylist by remember { mutableStateOf<DesktopSong?>(null) }
     var localPlaylistsForDialog by remember { mutableStateOf<List<DesktopPlaylist>>(emptyList()) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
+    var availableUpdate by remember { mutableStateOf<DesktopReleaseInfo?>(null) }
+    var isCheckingForUpdate by remember { mutableStateOf(false) }
+    var showConnectFlyout by remember { mutableStateOf(false) }
+    val selectedDeviceId by DeviceDiscoveryService.selectedDeviceId.collectAsState()
+
+    LaunchedEffect(Unit) {
+        scope.launch {
+            try {
+                val result = DesktopUpdater.checkForUpdate()
+                val update = result.getOrNull()
+                if (update != null) {
+                    availableUpdate = update
+                    DesktopUpdater.showDesktopNotification(
+                        title = "Pembaruan Tersedia!",
+                        message = "Versi ${update.versionName} tersedia untuk Echo."
+                    )
+                }
+            } catch (_: Throwable) {
+                // Ignore silent update errors
+            }
+        }
+    }
 
     fun navigateTo(next: NavState) {
         if (next == nav) return
@@ -447,13 +505,23 @@ fun FrameWindowScope.DesktopMainView(
         )
     }
 
+    if (availableUpdate != null) {
+        UpdateDialog(
+            releaseInfo = availableUpdate!!,
+            onDismissRequest = { availableUpdate = null }
+        )
+    }
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(DesktopColors.Background)
             .onPreviewKeyEvent {
                 if (it.key == Key.Escape) {
-                    if (playerProgress.value > 0.05f) {
+                    if (showConnectFlyout) {
+                        showConnectFlyout = false
+                        true
+                    } else if (playerProgress.value > 0.05f) {
                         scope.launch { playerProgress.animateTo(0f, springSpec) }
                         true
                     } else if (nav.isLyrics) {
@@ -606,6 +674,7 @@ fun FrameWindowScope.DesktopMainView(
                                 song = currentSong!!,
                                 player = player,
                                 repository = repository,
+                                playbackManager = playbackManager,
                                 onClose = { navigateTo(nav.copy(isLyrics = false)) },
                                 onAddToPlaylist = { songToAddToPlaylist = it }
                             )
@@ -632,7 +701,36 @@ fun FrameWindowScope.DesktopMainView(
                                     onBack = { goBack() },
                                     onAddToPlaylistRequest = { songToAddToPlaylist = it }
                                 )
-                                2 -> SettingsView(player)
+                                2 -> SettingsView(
+                                    player = player,
+                                    discordRpc = discordRpc,
+                                    onToggleDiscordRpc = { enabled ->
+                                        repository.setDiscordRpcEnabled(enabled)
+                                    },
+                                    isCheckingForUpdate = isCheckingForUpdate,
+                                    onCheckForUpdate = {
+                                        scope.launch {
+                                            if (isCheckingForUpdate) return@launch
+                                            isCheckingForUpdate = true
+                                            try {
+                                                val result = DesktopUpdater.checkForUpdate(forceRefresh = true)
+                                                val update = result.getOrNull()
+                                                if (update != null) {
+                                                    availableUpdate = update
+                                                } else if (result.isSuccess) {
+                                                    toastMessage = "Echo sudah versi terbaru (${DesktopUpdater.CURRENT_VERSION})"
+                                                } else {
+                                                    toastMessage = "Gagal memeriksa pembaruan: ${result.exceptionOrNull()?.message ?: "Koneksi bermasalah"}"
+                                                }
+                                            } catch (e: Throwable) {
+                                                toastMessage = "Gagal memeriksa pembaruan: ${e.message}"
+                                            } finally {
+                                                isCheckingForUpdate = false
+                                            }
+                                        }
+                                    },
+                                    onOpenConnectFlyout = { showConnectFlyout = true },
+                                )
                             }
                         }
 
@@ -699,7 +797,28 @@ fun FrameWindowScope.DesktopMainView(
                         navigateTo(nav.copy(isLyrics = true))
                     },
                     onAddToPlaylist = { songToAddToPlaylist = it },
+                    isConnectFlyoutOpen = showConnectFlyout,
+                    selectedDeviceId = selectedDeviceId,
+                    onToggleConnectFlyout = { showConnectFlyout = !showConnectFlyout },
                 )
+            }
+
+            // In-App Connect Device Flyout (Spotify Style)
+            if (showConnectFlyout) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            showConnectFlyout = false
+                        }
+                ) {
+                    ConnectDeviceFlyout(
+                        onClose = { showConnectFlyout = false },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = 84.dp)
+                    )
+                }
             }
         }
     }
@@ -1161,17 +1280,7 @@ fun HomeView(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (isSearching) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = DesktopColors.Primary)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            "Mencari lagu untuk \"$activeSearchQuery\"...",
-                            color = DesktopColors.TextSecondary,
-                            fontSize = 14.sp,
-                        )
-                    }
-                }
+                SongListSkeleton(count = 6)
             } else if (searchResults.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Card(
@@ -1312,13 +1421,7 @@ fun HomeView(
             Spacer(modifier = Modifier.height(18.dp))
 
             if (isLoadingHome) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = DesktopColors.AcidLime)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Memuat daftar rekomendasi lagu...", color = DesktopColors.Fog, fontSize = 14.sp)
-                    }
-                }
+                SongListSkeleton(count = 7)
             } else if (quickPicks.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Card(
@@ -1598,12 +1701,174 @@ fun SongListItem(
 }
 
 @Composable
-fun SettingsView(player: VlcAudioPlayer) {
-    Column(modifier = Modifier.fillMaxSize().padding(28.dp)) {
+fun SettingsView(
+    player: VlcAudioPlayer,
+    discordRpc: DesktopDiscordRpc? = null,
+    onToggleDiscordRpc: ((Boolean) -> Unit)? = null,
+    isCheckingForUpdate: Boolean = false,
+    onCheckForUpdate: () -> Unit = {},
+    onOpenConnectFlyout: (() -> Unit)? = null,
+) {
+    val isDiscordConnected by discordRpc?.isConnected?.collectAsState() ?: remember { mutableStateOf(false) }
+    val isDiscordEnabled by discordRpc?.isEnabled?.collectAsState() ?: remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxSize().padding(28.dp).verticalScroll(rememberScrollState())) {
         Text("Pengaturan & Informasi Sistem", fontSize = 24.sp, fontWeight = FontWeight.Medium, color = DesktopColors.Paper)
         Spacer(modifier = Modifier.height(4.dp))
-        Text("Panduan pintasan keyboard dan informasi sistem", fontSize = 13.sp, color = DesktopColors.Fog)
+        Text("Integrasi Discord, panduan pintasan keyboard, dan informasi sistem", fontSize = 13.sp, color = DesktopColors.Fog)
         Spacer(modifier = Modifier.height(20.dp))
+
+        // Card Discord Rich Presence
+        Card(
+            shape = DesktopRadii.Card,
+            colors = CardDefaults.cardColors(containerColor = DesktopColors.Carbon),
+            border = BorderStroke(1.dp, DesktopColors.Border),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Discord Rich Presence", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(DesktopRadii.Badge)
+                                    .background(if (isDiscordConnected) DesktopColors.AcidLime.copy(alpha = 0.15f) else DesktopColors.Obsidian)
+                                    .border(
+                                        BorderStroke(1.dp, if (isDiscordConnected) DesktopColors.AcidLime else DesktopColors.Border),
+                                        DesktopRadii.Badge
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isDiscordConnected) DesktopColors.AcidLime else DesktopColors.Fog)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isDiscordConnected) "Terhubung ke Discord" else "Menunggu Discord...",
+                                        fontSize = 11.sp,
+                                        color = if (isDiscordConnected) DesktopColors.AcidLime else DesktopColors.Fog,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Switch(
+                        checked = isDiscordEnabled,
+                        onCheckedChange = { checked ->
+                            discordRpc?.setEnabled(checked)
+                            onToggleDiscordRpc?.invoke(checked)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = DesktopColors.Void,
+                            checkedTrackColor = DesktopColors.AcidLime,
+                            uncheckedThumbColor = DesktopColors.Fog,
+                            uncheckedTrackColor = DesktopColors.Obsidian,
+                        )
+                    )
+                }
+            }
+        }
+
+        // Card Transmisi Nirkabel & Layar TV (Cast to TV)
+        Card(
+            shape = DesktopRadii.Card,
+            colors = CardDefaults.cardColors(containerColor = DesktopColors.Carbon),
+            border = BorderStroke(1.dp, DesktopColors.Border),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Transmisi Nirkabel & Layar TV (Cast to TV)", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(DesktopRadii.Badge)
+                                    .background(DesktopColors.AcidLime.copy(alpha = 0.15f))
+                                    .border(BorderStroke(1.dp, DesktopColors.AcidLime), DesktopRadii.Badge)
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "Miracast / Wi-Fi",
+                                    fontSize = 11.sp,
+                                    color = DesktopColors.AcidLime,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Hubungkan dan transmisikan pemutar musik secara nirkabel ke Smart TV (Samsung, LG, Android/Google TV) atau kelola speaker Bluetooth eksternal.",
+                            color = DesktopColors.Fog,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { WindowsCastHelper.openBluetoothSettings() },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DesktopColors.Paper),
+                            border = BorderStroke(1.dp, DesktopColors.Border),
+                            shape = DesktopRadii.Button,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
+                            Icon(
+                                Icons.Default.Bluetooth,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = DesktopColors.Fog,
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Bluetooth", fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                if (onOpenConnectFlyout != null) {
+                                    onOpenConnectFlyout()
+                                } else {
+                                    WindowsCastHelper.openCastFlyout()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DesktopColors.AcidLime,
+                                contentColor = DesktopColors.Void,
+                            ),
+                            shape = DesktopRadii.Button,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
+                            Icon(
+                                Icons.Default.Cast,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Pindai Smart TV", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
 
         // Card Keyboard Shortcuts
         Card(
@@ -1621,6 +1886,7 @@ fun SettingsView(player: VlcAudioPlayer) {
                     "Ctrl + Alt + Panah Kanan / Kiri" to "Pindah ke lagu berikutnya / sebelumnya dalam antrean",
                     "Ctrl + Panah Kanan / Kiri" to "Maju / Mundur 5 detik (Seek slider)",
                     "Ctrl + Panah Atas / Bawah" to "Menaikkan / Menurunkan volume audio pemutar",
+                    "Win + K" to "Buka panel transmisi layar Windows (Smart TV & Cast)",
                 )
                 shortcuts.forEach { (key, desc) ->
                     Row(
@@ -1657,13 +1923,57 @@ fun SettingsView(player: VlcAudioPlayer) {
             modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Text("Tentang Metrolist Desktop", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    "Versi 13.7.0 • Klien YouTube Music Desktop Native Windows berbasis Kotlin Multiplatform & Compose Desktop.",
-                    color = DesktopColors.Fog,
-                    fontSize = 12.5.sp,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text("Tentang Echo", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Versi ${DesktopUpdater.CURRENT_VERSION}",
+                            color = DesktopColors.Fog,
+                            fontSize = 12.5.sp,
+                        )
+                    }
+
+                    Button(
+                        onClick = onCheckForUpdate,
+                        enabled = !isCheckingForUpdate,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DesktopColors.AcidLime,
+                            contentColor = DesktopColors.Void,
+                            disabledContainerColor = DesktopColors.Obsidian,
+                            disabledContentColor = DesktopColors.Fog,
+                        ),
+                        shape = DesktopRadii.Badge,
+                    ) {
+                        if (isCheckingForUpdate) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = DesktopColors.Fog,
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Memeriksa...", fontSize = 12.sp, color = DesktopColors.Fog)
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = DesktopColors.Void,
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Periksa Pembaruan",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = DesktopColors.Void,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -1778,6 +2088,7 @@ fun SpotifyStyleProgressBar(
 @Composable
 private fun PlayerSeekBarRow(
     player: VlcAudioPlayer,
+    playbackManager: DesktopPlaybackManager,
     modifier: Modifier = Modifier,
 ) {
     val currentPosition by player.currentPosition.collectAsState()
@@ -1799,7 +2110,7 @@ private fun PlayerSeekBarRow(
         Spacer(modifier = Modifier.width(8.dp))
         SpotifyStyleProgressBar(
             value = if (duration > 0) currentPosition.toFloat() / duration else 0f,
-            onValueChange = { fraction -> player.seekTo((fraction * duration).toLong()) },
+            onValueChange = { fraction -> playbackManager.seekTo((fraction * duration).toLong()) },
             modifier = Modifier.weight(1f),
             activeColor = DesktopColors.Paper,
             inactiveColor = DesktopColors.Slate,
@@ -1920,16 +2231,26 @@ fun BottomPlayerBar(
     playbackManager: DesktopPlaybackManager,
     isNowPlayingOpen: Boolean = false,
     isLyricsOpen: Boolean = false,
+    isConnectFlyoutOpen: Boolean = false,
+    selectedDeviceId: String = "local_pc",
     onToggleNowPlaying: () -> Unit = {},
     onToggleLyrics: () -> Unit = {},
     onAddToPlaylist: ((DesktopSong) -> Unit)? = null,
+    onToggleConnectFlyout: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val isPlaying by player.isPlaying.collectAsState()
     val currentTitle by player.currentTitle.collectAsState()
     val currentArtist by player.currentArtist.collectAsState()
     val currentThumbnailUrl by player.currentThumbnailUrl.collectAsState()
-    val volume by player.volume.collectAsState()
+    val localVolume by player.volume.collectAsState()
+    val isCastConnected by GoogleCastManager.isConnected.collectAsState()
+    val castVolume by GoogleCastManager.castVolume.collectAsState()
+    val isCastMuted by GoogleCastManager.isCastMuted.collectAsState()
+    val connectedCastDevice by GoogleCastManager.connectedDevice.collectAsState()
+
+    val currentDisplayVolume = if (isCastConnected) castVolume else localVolume
+    val isDisplayMuted = if (isCastConnected) isCastMuted else (currentDisplayVolume == 0)
 
     val isShuffle by playbackManager.isShuffleEnabled.collectAsState()
     val repeatMode by playbackManager.repeatMode.collectAsState()
@@ -2044,7 +2365,7 @@ fun BottomPlayerBar(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            text = currentTitle.ifBlank { "Metrolist Desktop" },
+                            text = currentTitle.ifBlank { "Echo" },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = if (isNowPlayingOpen) DesktopColors.AcidLime else DesktopColors.Paper,
@@ -2141,7 +2462,7 @@ fun BottomPlayerBar(
                         // Play / Pause: High-emphasis Acid Lime action
                         PlayerTooltip(text = if (isPlaying) "Jeda" else "Putar") {
                             IconButton(
-                                onClick = { player.togglePlayPause() },
+                                onClick = { playbackManager.togglePlayPause() },
                                 modifier = Modifier
                                     .size(32.dp)
                                     .clip(CircleShape)
@@ -2214,6 +2535,7 @@ fun BottomPlayerBar(
                     // Seek Progress Bar (Garis Ramping 4dp dengan Waktu Kiri & Kanan terisolasi rekomposisinya)
                     PlayerSeekBarRow(
                         player = player,
+                        playbackManager = playbackManager,
                         modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
                     )
                 }
@@ -2260,35 +2582,92 @@ fun BottomPlayerBar(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
+                    // Connect to a device (Hubungkan ke Perangkat / Cast - Spotify Style)
+                    val isRemoteSelected = isCastConnected || selectedDeviceId != "local_pc"
+                    val isConnectActive = isRemoteSelected || isConnectFlyoutOpen
+                    val castTooltipText = if (isCastConnected && connectedCastDevice != null) {
+                        "Terhubung ke ${connectedCastDevice!!.name}"
+                    } else if (isRemoteSelected) {
+                        "Terhubung ke perangkat eksternal"
+                    } else {
+                        "Connect to a device"
+                    }
+                    PlayerTooltip(text = castTooltipText) {
+                        Box(contentAlignment = Alignment.BottomCenter) {
+                            IconButton(
+                                onClick = onToggleConnectFlyout,
+                                modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand),
+                            ) {
+                                Icon(
+                                    Icons.Default.Devices,
+                                    contentDescription = "Hubungkan ke perangkat",
+                                    tint = if (isConnectActive) DesktopColors.AcidLime else DesktopColors.Fog,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                            }
+                            if (isConnectActive) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(bottom = 1.dp)
+                                        .size(3.dp)
+                                        .clip(CircleShape)
+                                        .background(DesktopColors.AcidLime),
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
                     // Tombol Mute / Volume
-                    var previousVolume by remember { mutableStateOf(100) }
-                    PlayerTooltip(text = if (volume == 0) "Nyalakan Suara" else "Bisukan Suara") {
+                    var previousVolume by remember { mutableStateOf(50) }
+                    PlayerTooltip(text = if (isDisplayMuted) "Nyalakan Suara" else "Bisukan Suara") {
                         IconButton(
                             onClick = {
-                                if (volume > 0) {
-                                    previousVolume = volume
-                                    player.setVolume(0)
+                                if (isCastConnected) {
+                                    if (isDisplayMuted || currentDisplayVolume == 0) {
+                                        // Unmute TV secara aman tanpa melonjak ke volume keras
+                                        val targetVol = if (currentDisplayVolume in 5..60) currentDisplayVolume else if (previousVolume in 10..50) previousVolume else 25
+                                        GoogleCastManager.setVolume(targetVol)
+                                    } else {
+                                        previousVolume = currentDisplayVolume
+                                        GoogleCastManager.setMuted(true)
+                                    }
                                 } else {
-                                    player.setVolume(if (previousVolume > 0) previousVolume else 50)
+                                    if (localVolume > 0) {
+                                        previousVolume = localVolume
+                                        playbackManager.setVolume(0)
+                                    } else {
+                                        playbackManager.setVolume(if (previousVolume > 0) previousVolume else 50)
+                                    }
                                 }
                             },
                             modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand),
                         ) {
                             Icon(
-                                if (volume == 0) Icons.AutoMirrored.Filled.VolumeOff else if (volume < 50) Icons.AutoMirrored.Filled.VolumeDown else Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = if (volume == 0) "Nyalakan Suara" else "Bisukan Suara",
-                                tint = if (volume == 0) DesktopColors.CoralRed else DesktopColors.Fog,
+                                if (isDisplayMuted) Icons.AutoMirrored.Filled.VolumeOff
+                                else if (currentDisplayVolume < 50) Icons.AutoMirrored.Filled.VolumeDown
+                                else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = if (isDisplayMuted) "Nyalakan Suara" else "Bisukan Suara",
+                                tint = if (isDisplayMuted) DesktopColors.CoralRed else DesktopColors.Fog,
                                 modifier = Modifier.size(17.dp),
                             )
                         }
                     }
 
-                    // Volume Bar (Ramping 3dp)
+                    // Volume Bar (Ramping 3dp) - Hijau Acid Lime saat terhubung ke TV layaknya Spotify Connect
                     SpotifyStyleProgressBar(
-                        value = volume.toFloat() / 100f,
-                        onValueChange = { player.setVolume((it * 100).toInt()) },
+                        value = if (isDisplayMuted) 0f else (currentDisplayVolume.toFloat() / 100f),
+                        onValueChange = { fraction ->
+                            val target = (fraction * 100).toInt()
+                            if (isCastConnected) {
+                                GoogleCastManager.setVolume(target)
+                            } else {
+                                playbackManager.setVolume(target)
+                            }
+                        },
                         modifier = Modifier.width(volumeWidth),
-                        activeColor = DesktopColors.Paper,
+                        activeColor = if (isCastConnected) DesktopColors.AcidLime else DesktopColors.Paper,
                         inactiveColor = DesktopColors.Slate,
                         hoverColor = DesktopColors.AcidLime,
                         trackHeight = 3.dp,
@@ -2338,6 +2717,9 @@ fun BoxScope.UnifiedPlayerLayer(
     onClose: () -> Unit,
     onOpenLyrics: () -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
+    isConnectFlyoutOpen: Boolean = false,
+    selectedDeviceId: String = "local_pc",
+    onToggleConnectFlyout: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -2424,11 +2806,14 @@ fun BoxScope.UnifiedPlayerLayer(
                     playbackManager = playbackManager,
                     isNowPlayingOpen = false,
                     isLyricsOpen = false,
+                    isConnectFlyoutOpen = isConnectFlyoutOpen,
+                    selectedDeviceId = selectedDeviceId,
                     onToggleNowPlaying = {
                         scope.launch { progress.animateTo(1f, springSpec) }
                     },
                     onToggleLyrics = onOpenLyrics,
                     onAddToPlaylist = onAddToPlaylist,
+                    onToggleConnectFlyout = onToggleConnectFlyout,
                     modifier = Modifier
                         .fillMaxSize()
                         .clickable {

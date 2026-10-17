@@ -17,7 +17,10 @@ class LocalPlaylistStore(
     companion object {
         fun getDefaultStorageDir(): File {
             val userHome = System.getProperty("user.home") ?: "."
-            return File(userHome, ".metrolist").apply { mkdirs() }
+            val echoDir = File(userHome, ".echo")
+            val metrolistDir = File(userHome, ".metrolist")
+            val targetDir = if (echoDir.exists()) echoDir else if (metrolistDir.exists()) metrolistDir else echoDir
+            return targetDir.apply { mkdirs() }
         }
     }
 
@@ -147,18 +150,39 @@ class LocalPlaylistStore(
         }
 
         if (playlists.isEmpty()) {
-            val defaultFavorite = DesktopPlaylist(
-                id = "local_favorites",
-                title = "Favorit Saya",
-                author = "Lokal",
-                description = "Kumpulan lagu-lagu favorit pilihan Anda",
-                thumbnailUrl = null,
-                songs = emptyList(),
-                isLocal = true,
-                createdAt = System.currentTimeMillis(),
-            )
-            playlists.add(defaultFavorite)
-            saveToFile()
+            val userHome = System.getProperty("user.home") ?: "."
+            val legacyMetrolistFile = File(File(userHome, ".metrolist"), "playlists.json")
+            var migrated = false
+            if (storageDir == getDefaultStorageDir() && legacyMetrolistFile.exists()) {
+                try {
+                    val legacyContent = legacyMetrolistFile.readText()
+                    if (legacyContent.isNotBlank()) {
+                        val legacyPlaylists = json.decodeFromString<List<DesktopPlaylist>>(legacyContent)
+                        if (legacyPlaylists.isNotEmpty()) {
+                            playlists.addAll(legacyPlaylists)
+                            saveToFile()
+                            migrated = true
+                        }
+                    }
+                } catch (e: Exception) {
+                    System.err.println("Gagal migrasi playlist lama dari .metrolist: ${e.message}")
+                }
+            }
+
+            if (!migrated) {
+                val defaultFavorite = DesktopPlaylist(
+                    id = "local_favorites",
+                    title = "Favorit Saya",
+                    author = "Lokal",
+                    description = "Kumpulan lagu-lagu favorit pilihan Anda",
+                    thumbnailUrl = null,
+                    songs = emptyList(),
+                    isLocal = true,
+                    createdAt = System.currentTimeMillis(),
+                )
+                playlists.add(defaultFavorite)
+                saveToFile()
+            }
         }
 
         isLoaded = true

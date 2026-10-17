@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.metrolist.desktop.model.DesktopSong
+import com.metrolist.desktop.player.DesktopPlaybackManager
 import com.metrolist.desktop.player.VlcAudioPlayer
 import com.metrolist.desktop.repository.DesktopMusicRepository
 
@@ -205,6 +206,7 @@ fun DesktopLyricsDialog(
     song: DesktopSong,
     player: VlcAudioPlayer,
     repository: DesktopMusicRepository,
+    playbackManager: DesktopPlaybackManager? = null,
     onDismiss: () -> Unit,
 ) {
     var lyricsText by remember(song.id) { mutableStateOf<String?>(null) }
@@ -421,7 +423,7 @@ fun DesktopLyricsDialog(
                     SyncedLyricsView(
                         lyricsText = lyricsText!!,
                         currentPosition = currentPosition,
-                        onSeek = { player.seekTo(it) },
+                        onSeek = { pos -> playbackManager?.seekTo(pos) ?: player.seekTo(pos) },
                         lyricsOffsetMs = lyricsOffsetMs,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp, max = 480.dp),
                     )
@@ -450,6 +452,7 @@ fun DesktopLyricsPageView(
     song: DesktopSong,
     player: VlcAudioPlayer,
     repository: DesktopMusicRepository,
+    playbackManager: DesktopPlaybackManager? = null,
     onClose: () -> Unit,
     onAddToPlaylist: ((DesktopSong) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -796,7 +799,7 @@ fun DesktopLyricsPageView(
                             SyncedLyricsView(
                                 lyricsText = lyricsText!!,
                                 currentPosition = currentPosition,
-                                onSeek = { player.seekTo(it) },
+                                onSeek = { pos -> playbackManager?.seekTo(pos) ?: player.seekTo(pos) },
                                 lyricsOffsetMs = lyricsOffsetMs,
                                 isLargeMode = true,
                                 modifier = Modifier.fillMaxSize(),
@@ -853,7 +856,7 @@ fun DesktopLyricsPageView(
                             SyncedLyricsView(
                                 lyricsText = lyricsText!!,
                                 currentPosition = currentPosition,
-                                onSeek = { player.seekTo(it) },
+                                onSeek = { pos -> playbackManager?.seekTo(pos) ?: player.seekTo(pos) },
                                 lyricsOffsetMs = lyricsOffsetMs,
                                 isLargeMode = true,
                                 modifier = Modifier.fillMaxSize(),

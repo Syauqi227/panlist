@@ -1,11 +1,13 @@
 package com.metrolist.desktop.player
 
+import com.metrolist.desktop.cast.GoogleCastManager
 import com.metrolist.desktop.model.DesktopPlaylist
 import com.metrolist.desktop.model.DesktopSong
 import com.metrolist.desktop.repository.DesktopMusicRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,11 +51,45 @@ class DesktopPlaybackManager(
     val currentPlaylistTitle: StateFlow<String?> = _currentPlaylistTitle.asStateFlow()
 
     private var playbackJob: Job? = null
+    private var lastLocalVolume: Int = 100
+    private var lastFinishedTime: Long = 0L
 
     init {
         player.onPlaybackFinished = {
-            scope.launch {
-                handleTrackFinished()
+            if (!GoogleCastManager.isConnected.value) {
+                scope.launch {
+                    handleTrackFinished()
+                }
+            }
+        }
+
+        GoogleCastManager.onTrackFinished = {
+            if (GoogleCastManager.isConnected.value) {
+                scope.launch {
+                    handleTrackFinished()
+                }
+            }
+        }
+
+        GoogleCastManager.onCurrentTimeUpdated = { tvMs ->
+            if (GoogleCastManager.isConnected.value) {
+                val currentLocal = player.currentPosition.value
+                if (kotlin.math.abs(currentLocal - tvMs) > 1500L) {
+                    player.seekTo(tvMs)
+                }
+            }
+        }
+
+        scope.launch {
+            GoogleCastManager.isConnected.collect { connected ->
+                if (connected) {
+                    player.setMute(true)
+                    _currentSong.value?.let { song ->
+                        loadAndPlay(song)
+                    }
+                } else {
+                    player.setMute(false)
+                }
             }
         }
     }
@@ -103,7 +139,14 @@ class DesktopPlaybackManager(
 
         if (shuffle) {
             _isShuffleEnabled.value = true
-            val shuffled = playlist.songs.shuffled()
+            val safeIndex = startIndex.coerceIn(0, playlist.songs.size - 1)
+            val shuffled = if (startIndex > 0) {
+                val startSong = playlist.songs[safeIndex]
+                val remaining = playlist.songs.filterIndexed { i, _ -> i != safeIndex }.shuffled()
+                listOf(startSong) + remaining
+            } else {
+                playlist.songs.shuffled()
+            }
             _queue.value = shuffled
             _currentIndex.value = 0
             val targetSong = shuffled[0]
@@ -143,7 +186,7 @@ class DesktopPlaybackManager(
 
         // Jika lagu sudah berjalan lebih dari 4 detik, ulangi dari awal
         if (player.currentPosition.value > 4000L) {
-            player.seekTo(0L)
+            seekTo(0L)
             return
         }
 
@@ -168,11 +211,20 @@ class DesktopPlaybackManager(
         _isShuffleEnabled.value = newShuffle
 
         val current = _currentSong.value
+        val currIdx = _currentIndex.value
+
         if (newShuffle) {
-            val remaining = q.filter { it.id != current?.id }.shuffled()
-            val newQueue = if (current != null) listOf(current) + remaining else remaining
+            // Preserve playback history: songs played before currIdx remain in the past
+            val playedHistory = if (currIdx in q.indices) q.take(currIdx) else emptyList()
+            val currentItem = if (currIdx in q.indices) q[currIdx] else current
+            val upcoming = if (currIdx in q.indices) q.drop(currIdx + 1) else q.filter { it.id != current?.id }
+
+            // Only upcoming unplayed songs are shuffled
+            val shuffledUpcoming = upcoming.shuffled()
+            val newQueue = playedHistory + listOfNotNull(currentItem) + shuffledUpcoming
+
             _queue.value = newQueue
-            _currentIndex.value = 0
+            _currentIndex.value = playedHistory.size
         } else {
             _queue.value = unShuffledQueue
             _currentIndex.value = if (current != null) {
@@ -190,6 +242,10 @@ class DesktopPlaybackManager(
     }
 
     private fun handleTrackFinished() {
+        val now = System.currentTimeMillis()
+        if (now - lastFinishedTime < 1500L) return
+        lastFinishedTime = now
+
         when (_repeatMode.value) {
             RepeatMode.ONE -> {
                 _currentSong.value?.let { loadAndPlay(it) }
@@ -210,42 +266,103 @@ class DesktopPlaybackManager(
     private fun loadAndPlay(song: DesktopSong) {
         playbackJob?.cancel()
         playbackJob = scope.launch {
-            // 1. Prioritaskan file audio offline jika sudah terunduh di disk
+            // Debounce klik beruntun (spam next/previous/song) agar tidak membanjiri antrean & network
+            delay(250)
+
+            val isCast = GoogleCastManager.isConnected.value
             val localAudio = repository.downloadManager.getDownloadedAudioFile(song.id)
-            if (localAudio != null && localAudio.exists()) {
+            val hasLocalAudio = localAudio != null && localAudio.exists()
+
+            // 1. Dapatkan remote stream URL jika Cast aktif atau audio lokal belum diunduh
+            val remoteStreamUrl = if (isCast || !hasLocalAudio) {
+                _isResolving.value = true
+                val devName = GoogleCastManager.connectedDevice.value?.name ?: "TV"
+                _statusMessage.value = if (isCast) "Streaming '${song.title}' ke $devName..." else "Memuat audio: ${song.title}..."
+                val url = repository.resolveStreamUrl(song.id)
                 _isResolving.value = false
-                _statusMessage.value = if (!player.isAvailable) "LibVLC belum terinstal pada sistem. Silakan pasang VLC (64-bit)." else null
-                player.play(
-                    url = localAudio.absolutePath,
-                    title = song.title,
-                    artist = song.artist,
-                    thumbnailUrl = song.thumbnailUrl,
-                )
-                return@launch
+                url
+            } else {
+                null
             }
 
-            // 2. Jika belum diunduh, streaming langsung lewat jaringan
-            _isResolving.value = true
-            _statusMessage.value = "Memuat audio stream untuk: ${song.title}..."
-
-            val streamUrl = repository.resolveStreamUrl(song.id)
             _isResolving.value = false
+            _statusMessage.value = null
 
-            if (!streamUrl.isNullOrBlank()) {
-                if (!player.isAvailable) {
-                    _statusMessage.value = "LibVLC belum terinstal pada sistem. Silakan pasang VLC (64-bit)."
+            // 2. Putar ke Cast jika terhubung
+            if (isCast) {
+                if (!remoteStreamUrl.isNullOrBlank()) {
+                    GoogleCastManager.loadMedia(
+                        streamUrl = remoteStreamUrl,
+                        title = song.title,
+                        artist = song.artist,
+                        thumbnailUrl = song.thumbnailUrl,
+                    )
                 } else {
-                    _statusMessage.value = null
+                    _statusMessage.value = "Gagal memuat stream TV untuk '${song.title}'."
+                }
+            }
+
+            // 3. Putar ke VLC lokal (offline jika ada, atau remote stream jika belum)
+            val playUrl = if (hasLocalAudio) localAudio.absolutePath else remoteStreamUrl
+            if (!playUrl.isNullOrBlank()) {
+                if (!isCast && !player.isAvailable) {
+                    _statusMessage.value = "LibVLC belum terinstal pada sistem. Silakan pasang VLC (64-bit)."
                 }
                 player.play(
-                    url = streamUrl,
+                    url = playUrl,
                     title = song.title,
                     artist = song.artist,
                     thumbnailUrl = song.thumbnailUrl,
                 )
-            } else {
+                player.setMute(isCast)
+            } else if (!isCast) {
                 _statusMessage.value = "Koneksi terputus dan lagu '${song.title}' belum diunduh untuk offline."
             }
+        }
+    }
+
+    fun togglePlayPause() {
+        if (GoogleCastManager.isConnected.value) {
+            if (player.isPlaying.value) {
+                GoogleCastManager.pause()
+                player.pause()
+            } else {
+                GoogleCastManager.resume()
+                player.resume()
+            }
+        } else {
+            player.togglePlayPause()
+        }
+    }
+
+    fun pause() {
+        if (GoogleCastManager.isConnected.value) {
+            GoogleCastManager.pause()
+        }
+        player.pause()
+    }
+
+    fun resume() {
+        if (GoogleCastManager.isConnected.value) {
+            GoogleCastManager.resume()
+        }
+        player.resume()
+    }
+
+    fun seekTo(positionMs: Long) {
+        player.seekTo(positionMs)
+        if (GoogleCastManager.isConnected.value) {
+            GoogleCastManager.seek(positionMs)
+        }
+    }
+
+    fun setVolume(vol: Int) {
+        val clamped = vol.coerceIn(0, 100)
+        if (GoogleCastManager.isConnected.value) {
+            GoogleCastManager.setVolume(clamped)
+            lastLocalVolume = clamped
+        } else {
+            player.setVolume(clamped)
         }
     }
 

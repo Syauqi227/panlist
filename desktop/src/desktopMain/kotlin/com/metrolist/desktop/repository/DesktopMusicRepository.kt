@@ -74,9 +74,15 @@ class DesktopMusicRepository {
         }
     }
 
-    private val configRepository: PlayerConfigRepository by lazy {
+    private val desktopConfigRepository: DesktopPlayerConfigRepository by lazy {
         DesktopPlayerConfigRepository()
     }
+    private val configRepository: PlayerConfigRepository get() = desktopConfigRepository
+
+    fun isDiscordRpcEnabled(): Boolean = desktopConfigRepository.isDiscordRpcEnabled()
+    fun setDiscordRpcEnabled(enabled: Boolean) = desktopConfigRepository.setDiscordRpcEnabled(enabled)
+    fun getDiscordAppId(): String = desktopConfigRepository.getDiscordAppId()
+    fun setDiscordAppId(appId: String) = desktopConfigRepository.setDiscordAppId(appId)
 
     private val tokenProvider: TokenProvider = object : TokenProvider {
         override val capabilities = TokenProviderCapabilities(providers = emptySet(), usesWebView = false)
@@ -921,7 +927,10 @@ class DesktopMusicRepository {
             val baseDir = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
                 ?: System.getProperty("user.home")?.takeIf { it.isNotBlank() }
                 ?: "."
-            File(baseDir, "Metrolist").apply { mkdirs() }.resolve("player_config.properties")
+            val echoDir = File(baseDir, "Echo")
+            val metrolistDir = File(baseDir, "Metrolist")
+            val targetDir = if (echoDir.exists()) echoDir else if (metrolistDir.exists()) metrolistDir else echoDir
+            targetDir.apply { mkdirs() }.resolve("player_config.properties")
         }
 
         private val props = Properties().apply {
@@ -969,6 +978,24 @@ class DesktopMusicRepository {
                 props.setProperty("etag", value)
                 save()
             }
+
+        fun isDiscordRpcEnabled(): Boolean {
+            return props.getProperty("discord_rpc_enabled", "true").toBoolean()
+        }
+
+        fun setDiscordRpcEnabled(enabled: Boolean) {
+            props.setProperty("discord_rpc_enabled", enabled.toString())
+            save()
+        }
+
+        fun getDiscordAppId(): String {
+            return props.getProperty("discord_app_id", "1560875581988671528")
+        }
+
+        fun setDiscordAppId(appId: String) {
+            props.setProperty("discord_app_id", appId.trim())
+            save()
+        }
 
         private companion object {
             const val PLAYER_CONFIG_URL =

@@ -156,6 +156,14 @@ class VlcAudioPlayer(
         playerComponent?.mediaPlayer()?.audio()?.setVolume(clamped)
     }
 
+    fun setMute(muted: Boolean) {
+        playerComponent?.mediaPlayer()?.audio()?.setMute(muted)
+    }
+
+    fun isMuted(): Boolean {
+        return playerComponent?.mediaPlayer()?.audio()?.isMute ?: false
+    }
+
     fun release() {
         stopProgressTracker()
         playerComponent?.release()

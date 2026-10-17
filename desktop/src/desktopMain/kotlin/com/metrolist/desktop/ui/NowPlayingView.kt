@@ -255,7 +255,7 @@ fun NowPlayingView(
                         SyncedLyricsView(
                             lyricsText = lyricsText!!,
                             currentPosition = currentPosition,
-                            onSeek = { playbackManager.player.seekTo(it) },
+                            onSeek = { playbackManager.seekTo(it) },
                             modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 460.dp),
                         )
                     }

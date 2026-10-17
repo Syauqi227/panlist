@@ -75,11 +75,11 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe
             )
-            packageName = "Metrolist"
+            packageName = "Echo"
             modules("java.net.http")
             packageVersion = "13.7.3"
-            description = "YouTube Music Client for Windows"
-            vendor = "Metrolist Group"
+            description = "Echo - YouTube Music Client for Windows"
+            vendor = "Echo"
             windows {
                 menu = true
                 shortcut = true

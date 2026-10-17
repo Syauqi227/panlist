@@ -200,9 +200,7 @@ fun AddSongDirectlyDialog(
                 // Song list content
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     if (isSearching || (query.isBlank() && isLoadingRecommendations)) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = DesktopColors.AcidLime)
-                        }
+                        SongListSkeleton(count = 5)
                     } else {
                         val displayList = if (searchResults.isNotEmpty()) searchResults else recommendations
 

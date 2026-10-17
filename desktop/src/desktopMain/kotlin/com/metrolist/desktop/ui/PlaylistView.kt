@@ -636,9 +636,7 @@ private fun PlaylistOverviewView(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (isSearching) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = DesktopColors.AcidLime)
-                }
+                PlaylistGridSkeleton(count = 8)
             } else if (searchResults.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Card(
@@ -685,9 +683,7 @@ private fun PlaylistOverviewView(
 
         // Displaying lists according to category
         if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = DesktopColors.AcidLime)
-            }
+            PlaylistGridSkeleton(count = 8)
         } else {
             val localSummaries = localPlaylists.map { it.toSummary() }
             val itemsToDisplay = when (selectedCategoryIndex) {
@@ -1013,9 +1009,7 @@ fun PlaylistDetailView(
     }
 
     if (isLoading) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = DesktopColors.Primary)
-        }
+        PlaylistDetailSkeleton()
         return
     }
 

@@ -221,6 +221,62 @@ class PlaylistFeatureTest {
     }
 
     @Test
+    fun testShufflePreservesPlaybackHistory() {
+        val player = VlcAudioPlayer()
+        val repo = DesktopMusicRepository()
+        val manager = DesktopPlaybackManager(player, repo)
+
+        val songs = listOf(
+            DesktopSong("t1", "Track 1", "Artist 1", "3:00"),
+            DesktopSong("t2", "Track 2", "Artist 2", "3:30"),
+            DesktopSong("t3", "Track 3", "Artist 3", "4:00"),
+            DesktopSong("t4", "Track 4", "Artist 4", "4:30"),
+            DesktopSong("t5", "Track 5", "Artist 5", "5:00")
+        )
+
+        val playlist = DesktopPlaylist("pl_shuffle_test", "Shuffle Test", songs = songs)
+        manager.playPlaylist(playlist, startIndex = 0, shuffle = false)
+
+        // Play t1, then t2, then currently on t3
+        manager.playNext() // to t2
+        manager.playNext() // to t3
+        assertEquals(2, manager.currentIndex.value)
+        assertEquals("t3", manager.currentSong.value?.id)
+
+        // Toggle shuffle while on track 3
+        manager.toggleShuffle()
+        assertTrue(manager.isShuffleEnabled.value)
+
+        val q = manager.queue.value
+        assertEquals(5, q.size)
+        // Current index should still point to t3
+        assertEquals(2, manager.currentIndex.value)
+        assertEquals("t3", q[manager.currentIndex.value].id)
+
+        // Past items (indices 0 and 1) MUST be the already-played tracks t1 and t2
+        assertEquals(listOf("t1", "t2"), listOf(q[0].id, q[1].id))
+
+        // Upcoming items (indices 3 and 4) must contain ONLY the unplayed tracks t4 and t5
+        val upcomingIds = listOf(q[3].id, q[4].id)
+        assertTrue(upcomingIds.contains("t4"))
+        assertTrue(upcomingIds.contains("t5"))
+        assertFalse(upcomingIds.contains("t1"))
+        assertFalse(upcomingIds.contains("t2"))
+
+        // Playing next advances to unplayed tracks
+        manager.playNext()
+        assertEquals(3, manager.currentIndex.value)
+        assertTrue(manager.currentSong.value?.id == "t4" || manager.currentSong.value?.id == "t5")
+
+        manager.playNext()
+        assertEquals(4, manager.currentIndex.value)
+        assertTrue(manager.currentSong.value?.id == "t4" || manager.currentSong.value?.id == "t5")
+
+        // No more tracks to repeat in RepeatMode.NONE
+        assertFalse(manager.hasNext)
+    }
+
+    @Test
     fun testDirectSongAdditionToExistingPlaylist() = runBlocking {
         val testDir = tempFolder.newFolder("direct_add_test")
         val store = LocalPlaylistStore(storageDir = testDir)

@@ -24,11 +24,11 @@ class WindowsMediaControls(
         return when {
             // Media keys (standard Windows multimedia keyboard keys)
             event.key == Key.MediaPlayPause -> {
-                player.togglePlayPause()
+                playbackManager?.togglePlayPause() ?: player.togglePlayPause()
                 true
             }
             event.key == Key.MediaStop -> {
-                player.pause()
+                playbackManager?.pause() ?: player.pause()
                 true
             }
             event.key == Key.MediaNext || event.key == Key.MediaSkipForward -> {
@@ -42,7 +42,7 @@ class WindowsMediaControls(
 
             // Spacebar: Play / Pause (if not typing in a text field)
             event.key == Key.Spacebar && !event.isCtrlPressed -> {
-                player.togglePlayPause()
+                playbackManager?.togglePlayPause() ?: player.togglePlayPause()
                 true
             }
 
@@ -59,22 +59,25 @@ class WindowsMediaControls(
 
             event.isCtrlPressed && event.key == Key.DirectionRight -> {
                 val newPos = player.currentPosition.value + 5000L
-                player.seekTo(newPos.coerceAtMost(player.duration.value))
+                val clamped = newPos.coerceAtMost(player.duration.value)
+                playbackManager?.seekTo(clamped) ?: player.seekTo(clamped)
                 true
             }
             event.isCtrlPressed && event.key == Key.DirectionLeft -> {
                 val newPos = (player.currentPosition.value - 5000L).coerceAtLeast(0L)
-                player.seekTo(newPos)
+                playbackManager?.seekTo(newPos) ?: player.seekTo(newPos)
                 true
             }
 
             // Ctrl + Arrow Up / Down: Volume adjustment
             event.isCtrlPressed && event.key == Key.DirectionUp -> {
-                player.setVolume(player.volume.value + 5)
+                val newVol = (player.volume.value + 5).coerceIn(0, 100)
+                playbackManager?.setVolume(newVol) ?: player.setVolume(newVol)
                 true
             }
             event.isCtrlPressed && event.key == Key.DirectionDown -> {
-                player.setVolume(player.volume.value - 5)
+                val newVol = (player.volume.value - 5).coerceIn(0, 100)
+                playbackManager?.setVolume(newVol) ?: player.setVolume(newVol)
                 true
             }
 
