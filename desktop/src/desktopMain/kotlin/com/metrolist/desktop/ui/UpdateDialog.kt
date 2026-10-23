@@ -209,12 +209,14 @@ fun UpdateDialog(
                             Icons.Default.Download,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
+                            tint = DesktopColors.Void,
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             "Unduh Pembaruan",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
+                            color = DesktopColors.Void,
                         )
                     }
                 }
