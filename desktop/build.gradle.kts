@@ -77,7 +77,7 @@ compose.desktop {
             )
             packageName = "Echo"
             modules("java.net.http")
-            packageVersion = "13.7.3"
+            packageVersion = "13.7.4"
             description = "Echo - YouTube Music Client for Windows"
             vendor = "Echo"
             windows {

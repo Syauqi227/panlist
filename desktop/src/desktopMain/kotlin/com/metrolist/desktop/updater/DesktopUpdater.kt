@@ -27,7 +27,7 @@ data class DesktopReleaseInfo(
 )
 
 object DesktopUpdater {
-    const val CURRENT_VERSION = "13.7.3"
+    const val CURRENT_VERSION = "13.7.4"
     const val GITHUB_REPO_OWNER = "Syauqi227"
     const val GITHUB_REPO_NAME = "panlist"
     const val LATEST_RELEASE_API_URL = "https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME/releases/latest"
