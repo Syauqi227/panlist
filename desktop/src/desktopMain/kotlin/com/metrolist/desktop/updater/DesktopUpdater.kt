@@ -10,11 +10,13 @@ import java.awt.Desktop
 import java.awt.SystemTray
 import java.awt.Toolkit
 import java.awt.TrayIcon
+import java.io.File
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import kotlin.system.exitProcess
 
 data class DesktopReleaseInfo(
     val tagName: String,
@@ -27,7 +29,7 @@ data class DesktopReleaseInfo(
 )
 
 object DesktopUpdater {
-    const val CURRENT_VERSION = "13.7.4"
+    const val CURRENT_VERSION = "13.7.5"
     const val GITHUB_REPO_OWNER = "Syauqi227"
     const val GITHUB_REPO_NAME = "panlist"
     const val LATEST_RELEASE_API_URL = "https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME/releases/latest"
@@ -168,5 +170,83 @@ object DesktopUpdater {
         } catch (_: Throwable) {
             // Silently fallback if system tray is not available
         }
+    }
+
+    suspend fun downloadAndInstallUpdate(
+        downloadUrl: String,
+        onProgress: (Float) -> Unit,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create(downloadUrl))
+                .header("User-Agent", "Echo-Desktop/$CURRENT_VERSION")
+                .timeout(Duration.ofMinutes(15))
+                .GET()
+                .build()
+
+            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
+            if (response.statusCode() !in 200..299) {
+                throw RuntimeException("Gagal mengunduh installer (HTTP ${response.statusCode()})")
+            }
+
+            val contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L)
+            val isMsi = downloadUrl.substringBefore("?").endsWith(".msi", ignoreCase = true)
+            val suffix = if (isMsi) ".msi" else ".exe"
+            val tempFile = File.createTempFile("echo_update_", suffix)
+
+            response.body().use { input ->
+                tempFile.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var bytesRead: Int
+                    var totalRead = 0L
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
+                        if (contentLength > 0) {
+                            onProgress((totalRead.toDouble() / contentLength.toDouble()).toFloat().coerceIn(0f, 1f))
+                        }
+                    }
+                    output.flush()
+                }
+            }
+
+            installAndRestart(tempFile)
+        }
+    }
+
+    fun installAndRestart(installerFile: File) {
+        val appPath = ProcessHandle.current().info().command().orElse("")
+        val isMsi = installerFile.name.endsWith(".msi", ignoreCase = true)
+        val tempDir = System.getProperty("java.io.tmpdir")
+        val batFile = File(tempDir, "echo_updater_${System.currentTimeMillis()}.bat")
+
+        val installCmd = if (isMsi) {
+            "start /wait msiexec /i \"%~1\" /passive /norestart"
+        } else {
+            "start /wait \"\" \"%~1\" /SILENT"
+        }
+
+        val restartCmd = if (appPath.isNotBlank() && appPath.endsWith(".exe", ignoreCase = true) && !appPath.endsWith("java.exe", ignoreCase = true)) {
+            "if exist \"%~2\" start \"\" \"%~2\""
+        } else {
+            ""
+        }
+
+        val batContent = buildString {
+            appendLine("@echo off")
+            appendLine("ping -n 3 127.0.0.1 > nul")
+            appendLine(installCmd)
+            if (restartCmd.isNotBlank()) {
+                appendLine(restartCmd)
+            }
+            appendLine("(goto) 2>nul & del \"%~1\" & del \"%~f0\"")
+        }
+
+        batFile.writeText(batContent)
+
+        ProcessBuilder("cmd.exe", "/c", batFile.absolutePath, installerFile.absolutePath, appPath)
+            .start()
+
+        exitProcess(0)
     }
 }

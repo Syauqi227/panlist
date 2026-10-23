@@ -12,7 +12,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.metrolist.desktop.updater.DesktopReleaseInfo
 import com.metrolist.desktop.updater.DesktopUpdater
+import kotlinx.coroutines.launch
 
 @Composable
 fun UpdateDialog(
@@ -34,7 +35,13 @@ fun UpdateDialog(
         onDismissRequest()
     },
 ) {
-    Dialog(onDismissRequest = onDismissRequest) {
+    var isUpdating by remember { mutableStateOf(false) }
+    var updateProgress by remember { mutableStateOf(0f) }
+    var updateStatusText by remember { mutableStateOf("") }
+    var updateError by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    Dialog(onDismissRequest = { if (!isUpdating) onDismissRequest() }) {
         Card(
             shape = DesktopRadii.Card,
             colors = CardDefaults.cardColors(containerColor = DesktopColors.Obsidian),
@@ -82,7 +89,8 @@ fun UpdateDialog(
                     }
 
                     IconButton(
-                        onClick = onDismissRequest,
+                        onClick = { if (!isUpdating) onDismissRequest() },
+                        enabled = !isUpdating,
                         modifier = Modifier.size(28.dp),
                     ) {
                         Icon(
@@ -175,49 +183,116 @@ fun UpdateDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Buttons: Later & Download Update
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedButton(
-                        onClick = onDismissRequest,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = DesktopColors.Mist),
-                        border = BorderStroke(1.dp, DesktopColors.Border),
-                        shape = DesktopRadii.Button,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                if (isUpdating) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("Nanti", fontSize = 13.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                updateStatusText.ifBlank { "Mengunduh pembaruan..." },
+                                color = DesktopColors.Paper,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                "${(updateProgress * 100).toInt()}%",
+                                color = DesktopColors.AcidLime,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { updateProgress },
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(DesktopRadii.Pill),
+                            color = DesktopColors.AcidLime,
+                            trackColor = DesktopColors.Slate,
+                        )
+                        Text(
+                            "Aplikasi akan otomatis menutup, memasang pembaruan, lalu membuka kembali.",
+                            color = DesktopColors.Fog,
+                            fontSize = 11.5.sp,
+                        )
+                    }
+                } else {
+                    if (updateError != null) {
+                        Text(
+                            text = "Gagal memperbarui: $updateError",
+                            color = DesktopColors.CoralRed,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
                     }
 
-                    Button(
-                        onClick = {
-                            val targetUrl = releaseInfo.downloadUrl ?: releaseInfo.releaseUrl
-                            onDownloadClick(targetUrl)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = DesktopColors.AcidLime,
-                            contentColor = DesktopColors.Void,
-                        ),
-                        shape = DesktopRadii.Button,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    // Buttons: Later & Auto Update
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = DesktopColors.Void,
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            "Unduh Pembaruan",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = DesktopColors.Void,
-                        )
+                        OutlinedButton(
+                            onClick = onDismissRequest,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DesktopColors.Mist),
+                            border = BorderStroke(1.dp, DesktopColors.Border),
+                            shape = DesktopRadii.Button,
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Text("Nanti", fontSize = 13.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                val targetUrl = releaseInfo.downloadUrl ?: releaseInfo.releaseUrl
+                                val isInstaller = targetUrl.substringBefore("?").endsWith(".msi", ignoreCase = true) ||
+                                        targetUrl.substringBefore("?").endsWith(".exe", ignoreCase = true)
+
+                                if (!isInstaller) {
+                                    onDownloadClick(targetUrl)
+                                    return@Button
+                                }
+
+                                isUpdating = true
+                                updateError = null
+                                updateStatusText = "Menghubungi server..."
+                                coroutineScope.launch {
+                                    val result = DesktopUpdater.downloadAndInstallUpdate(targetUrl) { progress ->
+                                        updateProgress = progress
+                                        val pct = (progress * 100).toInt()
+                                        updateStatusText = "Mengunduh pembaruan... $pct%"
+                                    }
+                                    result.onFailure { error ->
+                                        isUpdating = false
+                                        updateError = error.localizedMessage ?: "Terjadi kesalahan saat mengunduh."
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DesktopColors.AcidLime,
+                                contentColor = DesktopColors.Void,
+                            ),
+                            shape = DesktopRadii.Button,
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = DesktopColors.Void,
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Perbarui Otomatis",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = DesktopColors.Void,
+                            )
+                        }
                     }
                 }
             }
