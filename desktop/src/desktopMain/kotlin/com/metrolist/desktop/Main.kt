@@ -1781,7 +1781,7 @@ fun SettingsView(
             }
         }
 
-        // Card Transmisi Nirkabel & Layar TV (Cast to TV)
+        // Card Transmisi Nirkabel & Cast to TV
         Card(
             shape = DesktopRadii.Card,
             colors = CardDefaults.cardColors(containerColor = DesktopColors.Carbon),
@@ -1796,7 +1796,7 @@ fun SettingsView(
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Transmisi Nirkabel & Layar TV (Cast to TV)", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
+                            Text("Transmisi Nirkabel & Cast to TV", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
                             Spacer(modifier = Modifier.width(10.dp))
                             Box(
                                 modifier = Modifier
@@ -1813,13 +1813,6 @@ fun SettingsView(
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "Hubungkan dan transmisikan pemutar musik secara nirkabel ke Smart TV (Samsung, LG, Android/Google TV) atau kelola speaker Bluetooth eksternal.",
-                            color = DesktopColors.Fog,
-                            fontSize = 12.5.sp,
-                            lineHeight = 17.sp,
-                        )
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1861,9 +1854,15 @@ fun SettingsView(
                                 Icons.Default.Cast,
                                 contentDescription = null,
                                 modifier = Modifier.size(15.dp),
+                                tint = DesktopColors.Void,
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Pindai Smart TV", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Pindai Smart TV",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = DesktopColors.Void,
+                            )
                         }
                     }
                 }
