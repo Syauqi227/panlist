@@ -1,349 +1,121 @@
 <div align="center">
 
-<img src="fastlane/metadata/android/en-US/images/icon.png" alt="Metrolist app icon" width="200" />
+<img src="desktop/src/desktopMain/resources/icons/icon.png" alt="Echo app icon" width="160" />
 
-# Metrolist
+# Echo
 
-### YouTube Music client for Android
-
-<br/>
-
-<a href="https://www.blacksmith.sh">
-  <img src="assets/blacksmith-powered.png" alt="CI powered by Blacksmith" width="280" />
-</a>
-
-<br/>
-<br/>
-
-[![Latest release](https://img.shields.io/github/v/release/MetrolistGroup/Metrolist?style=for-the-badge&labelColor=0d1117)](https://github.com/MetrolistGroup/Metrolist/releases)
-[![License](https://img.shields.io/github/license/MetrolistGroup/metrolist?style=for-the-badge&labelColor=0d1117)](https://github.com/MetrolistGroup/Metrolist/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/MetrolistGroup/Metrolist/total?style=for-the-badge&labelColor=0d1117)](https://github.com/MetrolistGroup/Metrolist/releases)
+### Lightweight YouTube Music Client for Windows Desktop
 
 <br/>
 
-[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d1117)](https://dsc.gg/metrolist)
-[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white&labelColor=0d1117)](https://t.me/metrolistapp)
+[![Latest Release](https://img.shields.io/github/v/release/Syauqi227/panlist?style=for-the-badge&labelColor=0d1117)](https://github.com/Syauqi227/panlist/releases)
+[![License](https://img.shields.io/github/license/Syauqi227/panlist?style=for-the-badge&labelColor=0d1117)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117)](#requirements)
+[![Kotlin](https://img.shields.io/badge/Kotlin-Compose%20Desktop-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white&labelColor=0d1117)](#tech-stack)
 
 <br/>
 
-[**Download**](#download-now) · [**Features**](#features) · [**Translate**](#translations) · [**FAQ**](#faq) · [**Support**](#support-the-project)
-
-</div>
-
-> [!WARNING]
-> # MAINTENANCE MODE
-> Metrolist is currently in maintenance mode. This means we will only be fixing bugs and making minor improvements. Please do not submit PRs for new features or major changes, as they will not be accepted.  
-> The app is **NOT** dead, please stay tuned for updates on our discord (found above).
-
-> [!WARNING]
-> **Regional Restriction** - If YouTube Music is unavailable in your region, this app will not work without a **VPN or proxy** connecting to a supported region.
-
----
-
-<div align="center">
-
-<h1><a id="screenshots"></a>Screenshots</h1>
-
-<img src="fastlane/metadata/android/en-US/images/screenshots/screenshot_1.png" alt="Home screen" width="30%" />
-<img src="fastlane/metadata/android/en-US/images/screenshots/screenshot_2.png" alt="Artist screen" width="30%" />
-<img src="fastlane/metadata/android/en-US/images/screenshots/screenshot_3.png" alt="Recognize music screen" width="30%" />
-<img src="fastlane/metadata/android/en-US/images/screenshots/screenshot_4.png" alt="Listen together screen" width="30%" />
-<img src="fastlane/metadata/android/en-US/images/screenshots/screenshot_5.png" alt="Player screen" width="30%" />
-<img src="fastlane/metadata/android/en-US/images/screenshots/screenshot_6.png" alt="Player lyrics screen" width="30%" />
+[**Features**](#features) · [**Requirements**](#requirements) · [**Download**](#download) · [**Build from Source**](#build-from-source)
 
 </div>
 
 ---
 
-<div align="center">
+## Overview
 
-<h1><a id="features"></a>Features</h1>
+**Echo** is an independent, fast, and lightweight native Windows desktop music player powered by the YouTube Music catalog. Built with **Compose Multiplatform Desktop** and **LibVLC**, Echo delivers ad-free audio streaming, offline playback, instant Spotify playlist importing, and responsive Linear-inspired dark UI without heavy browser memory overhead.
+
+---
+
+## <a id="features"></a>Features
 
 <table>
   <tr>
     <td width="50%" valign="top">
 
-#### Playback
-- Stream any song or video from YouTube Music
-- Background playback
-- Download & cache for offline use
-- Skip silence
-- Sleep timer
+#### Playback & Audio
+- Stream any song from the YouTube Music catalog
+- Powered by **LibVLC (`vlcj`)** for stable, low-memory native playback
+- **Offline Download & Playback** — download tracks locally and listen 100% offline
+- **Smart Shuffle (Anti-Repeat)** — preserves played history (`playedHistory`) and prevents repeating tracks in the same cycle
+- **Windows Media Keys & SMTC** — control playback seamlessly with hardware media keys
+- **Connect to TV** — pair and cast playback directly to YouTube on smart TVs (Lounge API)
 
 </td>
     <td width="50%" valign="top">
 
-#### Audio
-- Audio normalization
-- Tempo & pitch control
-- Equalizer
-- Crossfade
-
-</td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-
-#### Lyrics & Discovery
-- Live synced lyrics
-- AI-powered lyrics translation
-- Personalized quick picks
-- Search songs, albums, artists, videos, and playlists
-
-</td>
-    <td width="50%" valign="top">
-
-#### Library & Account
-- Full library management
-- Local playlists
-- Import playlists
-- Reorder songs in playlist or queue
-- YouTube Music account login
-- Sync songs, artists, albums, and playlists
-
-</td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-
-#### Social
-- Listen together with friends in real-time
-- Last.fm integration for scrobbling
-- Safe Discord Rich Presence
-
-</td>
-    <td width="50%" valign="top">
-
-#### Interface
-- Home screen widget
-- Light / Dark / Black / Dynamic theme modes
-- Dynamic color + 19 preset color palettes
-- Built with Material 3
+#### Library, Lyrics & Interface
+- **Spotify Playlist Importer** — import public Spotify playlists directly into Echo without needing a Spotify account
+- **Local Playlists** — create, manage, and persist playlists locally on your PC
+- **Live Synced Lyrics** — time-synced lyrics integration for currently playing tracks
+- **Linear Modern Dark UI** — clean, distraction-free dark interface with custom window title bar integration
+- **In-App Updater** — check and install updates directly from GitHub Releases
 
 </td>
   </tr>
 </table>
 
-</div>
+---
+
+## <a id="requirements"></a>Requirements
+
+- **Operating System:** Windows 10 or Windows 11 (64-bit)
+- **VLC Media Player (64-bit):** Required on the system for the LibVLC (`vlcj`) audio engine
+- **For Development / Building from Source:** JDK 21 (JetBrains Runtime 21 recommended for custom window decorations)
 
 ---
 
-<div align="center">
+## <a id="download"></a>Download
 
-<h1><a id="download-now"></a>Download Now</h1>
+Get the latest Windows installer (`.msi` / `.exe`) from the official repository releases page:
 
-<h2>Stable Release</h2>
-
-<table>
-  <tr>
-    <th align="center">Obtainium</th>
-    <th align="center">IzzyOnDroid</th>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/MetrolistGroup/Metrolist/">
-        <img src="assets/badges/obtainium.svg" alt="Add Metrolist to Obtainium" height="100">
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://apt.izzysoft.de/fdroid/index/apk/com.metrolist.music">
-        <img src="assets/badges/izzyondroid.svg" alt="Get Metrolist on IzzyOnDroid" height="100">
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <th align="center">OpenAPK</th>
-    <th align="center">GitHub</th>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://www.openapk.net/metrolist/com.metrolist.music/">
-        <img src="assets/badges/openapk.svg" alt="Get Metrolist on OpenAPK" height="100">
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/MetrolistGroup/Metrolist/releases/latest/download/Metrolist.apk">
-        <img src="assets/badges/github-stable.svg" alt="Get the stable Metrolist release on GitHub" height="100">
-      </a>
-    </td>
-  </tr>
-</table>
-
-<h2>Nightly Build</h2>
-
-<table>
-  <tr>
-    <th align="center">GitHub</th>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/MetrolistGroup/Metrolist/releases/download/nightly/Metrolist-with-Google-Cast.apk">
-        <img src="assets/badges/github-nightly.svg" alt="Get the Metrolist nightly build on GitHub" height="120">
-      </a>
-    </td>
-  </tr>
-</table>
-
-</div>
+- [**GitHub Releases (`Syauqi227/panlist`)**](https://github.com/Syauqi227/panlist/releases/latest)
 
 ---
 
-<div align="center">
+## <a id="build-from-source"></a>Build from Source
 
-<h1><a id="faq"></a>FAQ</h1>
+Clone the repository and run the Gradle tasks from the project directory:
 
-<h3>Got questions? Check out our <a href="https://metrolist.cc/#faq">FAQ page</a> for answers to the most common ones.</h3>
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="translations"></a>Translations</h1>
-
-[![Translation status](https://img.shields.io/weblate/progress/metrolist?style=for-the-badge&labelColor=0d1117)](https://hosted.weblate.org/engage/metrolist/)
-
-<h3>We use Weblate to translate Metrolist. <a href="https://hosted.weblate.org/projects/Metrolist/">Help us bring Metrolist to more people!</a></h3>
-
-<a href="https://hosted.weblate.org/projects/Metrolist/">
-  <img src="https://hosted.weblate.org/widget/Metrolist/horizontal-auto.svg" alt="Translation status" />
-</a>
-
-<h3>Thank you! Every translation makes Metrolist a little more accessible to someone, somewhere in the world.</h3>
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="support-the-project"></a>Support the Project</h1>
-
-<h3>Metrolist is free and open-source. If it brings you joy, consider supporting its development!</h3>
-
-#### Monero (XMR)
-
-<img src="assets/XMR.png" alt="Monero QR code" width="150" />
-
-```text
-44XjSELSWcgJTZiCKzjpCQWyXhokrH9RqH3rpp35FkSKi57T25hniHWHQNhLeXyFn3DDYqufmfRB1iEtENerZpJc7xJCcqt
+```bash
+git clone https://github.com/Syauqi227/panlist.git
+cd panlist
 ```
 
-#### Buy Me a Coffee
+### 1. Run Desktop App (Development)
+```bash
+./gradlew :desktop:run
+```
+*(Or run `run-desktop.bat` on Windows)*
 
-<a href="https://www.buymeacoffee.com/mostafaalagamy">
-  <img src="assets/buymeacoffee.png" alt="Buy Me a Coffee" width="150" />
-</a>
+### 2. Run Desktop Unit Tests
+```bash
+./gradlew desktopTest
+```
 
-</div>
+### 3. Compile Desktop Module
+```bash
+./gradlew :desktop:compileKotlinDesktop
+```
 
----
-
-<div align="center">
-
-<h1>Special Thanks</h1>
-
-<h3>Metrolist stands on the shoulders of incredible open-source work.</h3>
-
-<h3>Main Inspirations</h3>
-
-<table>
-  <thead>
-    <tr>
-      <th align="center">Project</th>
-      <th align="center">Authors</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td align="center"><strong>InnerTune</strong></td>
-      <td align="center"><a href="https://github.com/z-huang">Zion Huang</a> · <a href="https://github.com/Malopieds">Malopieds</a></td>
-    </tr>
-    <tr>
-      <td align="center"><strong>OuterTune</strong></td>
-      <td align="center"><a href="https://github.com/DD3Boh">Davide Garberi</a> · <a href="https://github.com/mikooomich">Michael Zh</a></td>
-    </tr>
-  </tbody>
-</table>
-
-<h3>Libraries & Integrations</h3>
-
-<table>
-  <thead>
-    <tr>
-      <th align="center">Project</th>
-      <th align="center">Contribution</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td align="center"><a href="https://better-lyrics.boidu.dev"><strong>Better Lyrics</strong></a></td>
-      <td>Time-synced lyrics with word-by-word highlighting & YouTube Music integration</td>
-    </tr>
-    <tr>
-      <td align="center"><a href="https://github.com/MetrolistGroup/metroserver"><strong>metroserver</strong></a></td>
-      <td>Listen-together real-time backend</td>
-    </tr>
-    <tr>
-      <td align="center"><a href="https://github.com/aleksey-saenko/MusicRecognizer"><strong>MusicRecognizer</strong></a></td>
-      <td>Music recognition feature & Shazam API integration</td>
-    </tr>
-    <tr>
-      <td align="center"><a href="https://github.com/ZemerTeam/zemer-cipher"><strong>zemer-cipher</strong></a></td>
-      <td>YouTube cipher deobfuscation and PoToken generation</td>
-    </tr>
-    <tr>
-      <td align="center"><a href="https://www.blacksmith.sh"><strong>Blacksmith</strong></a></td>
-      <td>High-performance GitHub Actions runners powering our CI</td>
-    </tr>
-  </tbody>
-</table>
-
-<br/>
-
-<a href="https://www.blacksmith.sh">
-  <img src="assets/blacksmith-powered.png" alt="CI powered by Blacksmith" width="280" />
-</a>
-
-<h3>We also thank the entire open-source community! For every library, tool, and API that powers this project.</h3>
-
-</div>
+### 4. Package Windows Installer (`.msi` / `.exe`)
+```bash
+./gradlew :desktop:packageMsi
+./gradlew :desktop:packageExe
+```
 
 ---
 
-<div align="center">
+## <a id="tech-stack"></a>Tech Stack
 
-<h1>Contributors</h1>
-
-<h3>This project wouldn't exist without these amazing people!</h3>
-
-<a href="https://github.com/MetrolistGroup/Metrolist/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=MetrolistGroup/Metrolist" alt="Contributors" />
-</a>
-
-</div>
+- **UI Framework:** Compose Multiplatform Desktop (Material 3 + Linear Modern Design System)
+- **Audio Engine:** LibVLC / VLCJ (`uk.co.caprica:vlcj`)
+- **Networking & Extractor:** Kotlin Coroutines & Ktor (`:innertube` client)
+- **Image Loading:** Coil 3 Multiplatform
+- **Dependency Injection:** Koin
 
 ---
 
-<div align="center">
+## Disclaimer
 
-<h1>Disclaimer</h1>
-
-This project is **not affiliated with, funded, authorized, endorsed by, or in any way associated** with YouTube, Google LLC, Metrolist Group LLC, or any of their affiliates and subsidiaries.
-
-All trademarks, service marks, and intellectual property rights referenced in this project belong to their respective owners.
-
-</div>
-
----
-
-<div align="center">
-
-<br/>
-
-**Made with ❤️ by [Mo Agamy](https://github.com/mostafaalagamy)**
-
-**This project stands with Palestine 🇵🇸**
-
-</div>
+This project is an independent open-source application and is **not affiliated with, funded, authorized, endorsed by, or in any way associated** with YouTube, Google LLC, Spotify AB, or any of their affiliates and subsidiaries. All trademarks and intellectual property rights belong to their respective owners.
