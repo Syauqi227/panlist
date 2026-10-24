@@ -116,6 +116,15 @@ cd panlist
 
 ---
 
+## Project Background & Origins
+
+> [!NOTE]
+> - **100% AI-Assisted:** This project was built and ported entirely using AI coding assistants.
+> - **Derivative of Metrolist:** Echo is a Windows desktop adaptation derived from the open-source [Metrolist](https://github.com/metrolistgroup/metrolist) project, re-architected to run natively on Windows using Compose Multiplatform and LibVLC.
+> - **Personal Project Made Public:** It was initially intended strictly for personal daily use in a private repository. It was made public primarily to enable seamless in-app updater functionality and installer distribution via GitHub Releases.
+
+---
+
 ## Disclaimer
 
 This project is an independent open-source application and is **not affiliated with, funded, authorized, endorsed by, or in any way associated** with YouTube, Google LLC, Spotify AB, or any of their affiliates and subsidiaries. All trademarks and intellectual property rights belong to their respective owners.
