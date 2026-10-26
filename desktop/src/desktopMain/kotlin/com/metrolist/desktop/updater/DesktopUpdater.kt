@@ -597,6 +597,8 @@ object DesktopUpdater {
 
                 // Identifikasi file lokal yang berbeda
                 val filesToUpdate = manifest.files.filter { entry ->
+                    val fileName = File(entry.path).name
+                    if (fileName.startsWith(".")) return@filter false
                     val localFile = File(installDir, entry.path)
                     !localFile.exists() || localFile.length() != entry.size || !verifyFileSha256(localFile, entry.sha256)
                 }

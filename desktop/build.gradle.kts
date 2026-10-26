@@ -227,7 +227,7 @@ val generateUpdateManifest = tasks.register("generateUpdateManifest") {
 
         if (appDir.exists()) {
             appDir.walkTopDown()
-                .filter { it.isFile && it.name != "update-manifest.json" }
+                .filter { it.isFile && !it.name.startsWith(".") && it.name != "update-manifest.json" }
                 .sortedBy { it.relativeTo(echoDir).path.replace('\\', '/') }
                 .forEach { f ->
                     val relPath = f.relativeTo(echoDir).path.replace('\\', '/')
