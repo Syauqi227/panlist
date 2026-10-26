@@ -15,6 +15,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.input.ImeAction
 
 @Composable
 fun CreatePlaylistDialog(
@@ -23,13 +29,33 @@ fun CreatePlaylistDialog(
 ) {
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
+    val titleFocusRequester = remember { FocusRequester() }
+
+    val handleConfirm = {
+        if (title.isNotBlank()) {
+            onConfirm(title.trim(), description.trim())
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        titleFocusRequester.requestFocus()
+    }
 
     Dialog(onDismissRequest = onDismissRequest) {
         Card(
             shape = DesktopRadii.Card,
             colors = CardDefaults.cardColors(containerColor = DesktopColors.Obsidian),
             border = BorderStroke(1.dp, DesktopColors.Border),
-            modifier = Modifier.widthIn(max = 440.dp).fillMaxWidth(0.92f).padding(16.dp),
+            modifier = Modifier
+                .widthIn(max = 440.dp)
+                .fillMaxWidth(0.92f)
+                .padding(16.dp)
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Escape) {
+                        onDismissRequest()
+                        true
+                    } else false
+                },
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -59,6 +85,8 @@ fun CreatePlaylistDialog(
                     placeholder = { Text("Contoh: Lagu Favorit, Kerja Fokus, Santai...", color = DesktopColors.Fog) },
                     singleLine = true,
                     shape = DesktopRadii.Input,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { handleConfirm() }),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = DesktopColors.AcidLime,
                         unfocusedBorderColor = DesktopColors.Border,
@@ -70,7 +98,15 @@ fun CreatePlaylistDialog(
                         unfocusedContainerColor = DesktopColors.Carbon,
                         cursorColor = DesktopColors.AcidLime,
                     ),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(titleFocusRequester)
+                        .onPreviewKeyEvent { keyEvent ->
+                            if (keyEvent.type == KeyEventType.KeyDown && (keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter)) {
+                                handleConfirm()
+                                true
+                            } else false
+                        },
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -110,11 +146,7 @@ fun CreatePlaylistDialog(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
-                        onClick = {
-                            if (title.isNotBlank()) {
-                                onConfirm(title.trim(), description.trim())
-                            }
-                        },
+                        onClick = { handleConfirm() },
                         enabled = title.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DesktopColors.AcidLime,

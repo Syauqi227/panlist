@@ -1,5 +1,8 @@
 package com.metrolist.desktop
 
+import androidx.compose.ui.focus.onFocusChanged
+import com.metrolist.desktop.ui.SearchDropdownMenu
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationVector1D
@@ -17,6 +20,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import kotlin.math.min
+import java.awt.Dimension
 import java.awt.Frame
 import java.awt.Rectangle
 import java.awt.Toolkit
@@ -39,6 +43,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -304,6 +309,7 @@ fun main() {
             val themeBgAwtColor = remember { java.awt.Color(0x08, 0x09, 0x0A) }
 
             DisposableEffect(window) {
+                window.minimumSize = Dimension(800, 560)
                 applyDarkAwtTheme(window, themeBgAwtColor)
                 applyDarkAwtTheme(window.contentPane, themeBgAwtColor)
                 applyDarkAwtTheme(window.rootPane, themeBgAwtColor)
@@ -316,6 +322,7 @@ fun main() {
                     }
                 }
                 window.addComponentListener(compListener)
+
 
                 if (isJbrSupported) {
                     try {
@@ -413,6 +420,7 @@ fun FrameWindowScope.DesktopMainView(
     var activeSearchQuery by remember { mutableStateOf("") }
 
     val currentSong by playbackManager.currentSong.collectAsState()
+    val isPlaying by playbackManager.player.isPlaying.collectAsState()
     val scope = rememberCoroutineScope()
 
     val isResolving by playbackManager.isResolving.collectAsState()
@@ -580,6 +588,19 @@ fun FrameWindowScope.DesktopMainView(
                         searchQuery = ""
                         activeSearchQuery = ""
                     },
+                    repository = repository,
+                    onSongSelected = { song ->
+                        if (currentSong?.id == song.id) {
+                            playbackManager.togglePlayPause()
+                        } else {
+                            playbackManager.playSong(song, listOf(song))
+                        }
+                    },
+                    onAddToPlaylist = { song ->
+                        songToAddToPlaylist = song
+                    },
+                    currentSong = currentSong,
+                    isPlaying = isPlaying,
                     windowState = windowState,
                     isMaximized = isCurrentlyMaximized,
                     customTitleBar = customTitleBar,
@@ -844,6 +865,11 @@ private fun FrameWindowScope.DesktopTopBar(
     onSearchQueryChange: (String) -> Unit,
     onSearchSubmit: () -> Unit,
     onClearSearch: () -> Unit,
+    repository: DesktopMusicRepository,
+    onSongSelected: (DesktopSong) -> Unit,
+    onAddToPlaylist: (DesktopSong) -> Unit,
+    currentSong: DesktopSong? = null,
+    isPlaying: Boolean = false,
     windowState: WindowState,
     isMaximized: Boolean,
     customTitleBar: WindowDecorations.CustomTitleBar?,
@@ -929,97 +955,212 @@ private fun FrameWindowScope.DesktopTopBar(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                Surface(
-                    shape = DesktopRadii.Input,
-                    color = DesktopColors.Obsidian,
-                    border = BorderStroke(1.dp, if (searchQuery.isNotEmpty()) DesktopColors.Smoke else DesktopColors.Border),
-                    modifier = Modifier
-                        .width(searchWidth)
-                        .height(36.dp),
+                val topBarScope = rememberCoroutineScope()
+                var showDropdown by remember { mutableStateOf(false) }
+                var selectedIndex by remember { mutableStateOf(-1) }
+                var currentDropdownItems by remember { mutableStateOf<List<com.metrolist.desktop.ui.DropdownItem>>(emptyList()) }
+
+                Box(
+                    contentAlignment = Alignment.TopCenter,
+                    modifier = Modifier.then(if (customTitleBar != null) Modifier.titleBarClient(customTitleBar) else Modifier),
                 ) {
-                    Row(
+                    Surface(
+                        shape = DesktopRadii.Input,
+                        color = DesktopColors.Obsidian,
+                        border = BorderStroke(1.dp, if (searchQuery.isNotEmpty() || showDropdown) DesktopColors.Smoke else DesktopColors.Border),
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .width(searchWidth)
+                            .height(36.dp),
                     ) {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = null,
-                            tint = if (searchQuery.isNotEmpty()) DesktopColors.AcidLime else DesktopColors.Fog,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        val searchTextStyle = TextStyle(
-                            color = DesktopColors.Paper,
-                            fontSize = 13.sp,
-                            lineHeight = 16.sp,
-                            lineHeightStyle = LineHeightStyle(
-                                alignment = LineHeightStyle.Alignment.Center,
-                                trim = LineHeightStyle.Trim.Both,
-                            ),
-                        )
-                        Box(
+                        Row(
                             modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            contentAlignment = Alignment.CenterStart,
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            BasicTextField(
-                                value = searchQuery,
-                                onValueChange = onSearchQueryChange,
-                                singleLine = true,
-                                textStyle = searchTextStyle,
-                                cursorBrush = SolidColor(DesktopColors.AcidLime),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .onKeyEvent {
-                                        if (it.key == Key.Enter && it.type == KeyEventType.KeyUp) {
-                                            onSearchSubmit()
-                                            true
-                                        } else false
-                                    },
-                                decorationBox = { innerTextField ->
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentAlignment = Alignment.CenterStart,
-                                    ) {
-                                        if (searchQuery.isEmpty()) {
-                                            Text(
-                                                "Cari lagu, artis, atau album...",
-                                                style = searchTextStyle.copy(color = DesktopColors.Fog),
-                                                maxLines = 1,
-                                            )
-                                        }
-                                        innerTextField()
-                                    }
-                                }
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = null,
+                                tint = if (searchQuery.isNotEmpty() || showDropdown) DesktopColors.Paper else DesktopColors.Fog,
+                                modifier = Modifier.size(18.dp),
                             )
-                        }
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(
-                                onClick = onClearSearch,
-                                modifier = Modifier.size(20.dp),
+                            Spacer(modifier = Modifier.width(8.dp))
+                            val searchTextStyle = TextStyle(
+                                color = DesktopColors.Paper,
+                                fontSize = 13.sp,
+                                lineHeight = 16.sp,
+                                lineHeightStyle = LineHeightStyle(
+                                    alignment = LineHeightStyle.Alignment.Center,
+                                    trim = LineHeightStyle.Trim.Both,
+                                ),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                contentAlignment = Alignment.CenterStart,
                             ) {
-                                Icon(
-                                    Icons.Default.Clear,
-                                    contentDescription = "Hapus",
-                                    tint = DesktopColors.Fog,
-                                    modifier = Modifier.size(14.dp),
+                                BasicTextField(
+                                    value = searchQuery,
+                                    onValueChange = {
+                                        onSearchQueryChange(it)
+                                        showDropdown = true
+                                        selectedIndex = -1
+                                    },
+                                    singleLine = true,
+                                    textStyle = searchTextStyle,
+                                    cursorBrush = SolidColor(DesktopColors.AcidLime),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .onFocusChanged { focusState ->
+                                            if (focusState.isFocused) {
+                                                showDropdown = true
+                                            }
+                                        }
+                                        .onPreviewKeyEvent { keyEvent ->
+                                            if (!showDropdown || keyEvent.type != KeyEventType.KeyDown) {
+                                                return@onPreviewKeyEvent false
+                                            }
+                                            when (keyEvent.key) {
+                                                Key.DirectionDown -> {
+                                                    if (currentDropdownItems.isNotEmpty()) {
+                                                        selectedIndex = if (selectedIndex >= currentDropdownItems.lastIndex) {
+                                                            0
+                                                        } else {
+                                                            selectedIndex + 1
+                                                        }
+                                                    }
+                                                    true
+                                                }
+                                                Key.DirectionUp -> {
+                                                    if (currentDropdownItems.isNotEmpty()) {
+                                                        selectedIndex = if (selectedIndex <= 0) {
+                                                            -1
+                                                        } else {
+                                                            selectedIndex - 1
+                                                        }
+                                                    }
+                                                    true
+                                                }
+                                                Key.Enter -> {
+                                                    if (selectedIndex in currentDropdownItems.indices) {
+                                                        when (val item = currentDropdownItems[selectedIndex]) {
+                                                            is com.metrolist.desktop.ui.DropdownItem.Song -> {
+                                                                topBarScope.launch {
+                                                                    repository.recentSearchStore.addRecentSearch(item.song)
+                                                                }
+                                                                onSongSelected(item.song)
+                                                                showDropdown = false
+                                                                selectedIndex = -1
+                                                            }
+                                                            is com.metrolist.desktop.ui.DropdownItem.Query -> {
+                                                                onSearchQueryChange(item.query)
+                                                                onSearchSubmit()
+                                                                showDropdown = false
+                                                                selectedIndex = -1
+                                                            }
+                                                        }
+                                                        true
+                                                    } else {
+                                                        showDropdown = false
+                                                        selectedIndex = -1
+                                                        onSearchSubmit()
+                                                        true
+                                                    }
+                                                }
+                                                Key.Escape -> {
+                                                    showDropdown = false
+                                                    selectedIndex = -1
+                                                    true
+                                                }
+                                                else -> false
+                                            }
+                                        },
+                                    decorationBox = { innerTextField ->
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart,
+                                        ) {
+                                            if (searchQuery.isEmpty()) {
+                                                Text(
+                                                    "Cari lagu, artis, atau album...",
+                                                    style = searchTextStyle.copy(color = DesktopColors.Fog),
+                                                    maxLines = 1,
+                                                )
+                                            }
+                                            innerTextField()
+                                        }
+                                    }
                                 )
                             }
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        onClearSearch()
+                                        showDropdown = true
+                                        selectedIndex = -1
+                                    },
+                                    modifier = Modifier.size(20.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Clear,
+                                        contentDescription = "Hapus",
+                                        tint = DesktopColors.Fog,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (showDropdown) {
+                        Popup(
+                            alignment = Alignment.TopCenter,
+                            offset = IntOffset(0, 44),
+                            onDismissRequest = { showDropdown = false; selectedIndex = -1 },
+                            properties = PopupProperties(
+                                focusable = false,
+                                dismissOnBackPress = true,
+                                dismissOnClickOutside = true,
+                            ),
+                        ) {
+                            SearchDropdownMenu(
+                                searchQuery = searchQuery,
+                                repository = repository,
+                                selectedIndex = selectedIndex,
+                                onItemsChanged = { items ->
+                                    currentDropdownItems = items
+                                },
+                                onQuerySelected = { selectedQuery ->
+                                    onSearchQueryChange(selectedQuery)
+                                    onSearchSubmit()
+                                    showDropdown = false
+                                    selectedIndex = -1
+                                },
+                                onSongSelected = { song ->
+                                    onSongSelected(song)
+                                    showDropdown = false
+                                    selectedIndex = -1
+                                },
+                                onAddToPlaylist = { song ->
+                                    onAddToPlaylist(song)
+                                    showDropdown = false
+                                },
+                                currentSongId = currentSong?.id,
+                                isPlaying = isPlaying,
+                                modifier = Modifier.width(searchWidth.coerceAtLeast(420.dp)),
+                            )
                         }
                     }
                 }
             }
 
             // Right: Window Control Buttons (Minimize, Maximize / Restore, Close)
-            if (customTitleBar != null) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .titleBarClient(customTitleBar)
-                        .fillMaxHeight(),
+            Row(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .then(if (customTitleBar != null) Modifier.titleBarClient(customTitleBar) else Modifier)
+                    .fillMaxHeight(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                 WindowControlButton(
@@ -1116,7 +1257,6 @@ private fun FrameWindowScope.DesktopTopBar(
             }
         }
     }
-}
 }
 
 @Composable
@@ -1333,14 +1473,23 @@ fun HomeView(
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(items = searchResults, key = { it.id }, contentType = { "search_song" }) { song ->
-                        val isThisSongPlaying = currentSong?.id == song.id && isPlaying
+                        val isThisSongCurrent = currentSong?.id == song.id
+                        val isThisSongPlaying = isThisSongCurrent && isPlaying
                         val isDownloaded = downloadedIds.contains(song.id)
                         val isDownloading = downloadProgress.containsKey(song.id)
 
                         SongListItem(
                             song = song,
-                            onPlay = { onSongSelected(song, searchResults) },
+                            onPlay = {
+                                if (isThisSongCurrent) {
+                                    playbackManager.togglePlayPause()
+                                } else {
+                                    onSongSelected(song, searchResults)
+                                }
+                            },
+                            onTogglePlayPause = { playbackManager.togglePlayPause() },
                             onAddToPlaylist = { onAddToPlaylist(song) },
+                            isCurrentSong = isThisSongCurrent,
                             isPlaying = isThisSongPlaying,
                             isDownloaded = isDownloaded,
                             isDownloading = isDownloading,
@@ -1486,14 +1635,23 @@ fun HomeView(
                         key = { it.id },
                         contentType = { "home_song" }
                     ) { song ->
-                        val isThisSongPlaying = currentSong?.id == song.id && isPlaying
+                        val isThisSongCurrent = currentSong?.id == song.id
+                        val isThisSongPlaying = isThisSongCurrent && isPlaying
                         val isDownloaded = downloadedIds.contains(song.id)
                         val isDownloading = downloadProgress.containsKey(song.id)
 
                         SongListItem(
                             song = song,
-                            onPlay = { onSongSelected(song, quickPicks) },
+                            onPlay = {
+                                if (isThisSongCurrent) {
+                                    playbackManager.togglePlayPause()
+                                } else {
+                                    onSongSelected(song, quickPicks)
+                                }
+                            },
+                            onTogglePlayPause = { playbackManager.togglePlayPause() },
                             onAddToPlaylist = { onAddToPlaylist(song) },
+                            isCurrentSong = isThisSongCurrent,
                             isPlaying = isThisSongPlaying,
                             isDownloaded = isDownloaded,
                             isDownloading = isDownloading,
@@ -1545,27 +1703,52 @@ fun HomeView(
 fun SongListItem(
     song: DesktopSong,
     onPlay: () -> Unit,
+    onTogglePlayPause: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
+    isCurrentSong: Boolean = false,
     isPlaying: Boolean = false,
     isDownloaded: Boolean = false,
     isDownloading: Boolean = false,
     onToggleDownload: (() -> Unit)? = null,
 ) {
-    val borderColor = if (isPlaying) DesktopColors.AcidLime.copy(alpha = 0.5f) else DesktopColors.Border
-    val cardColor = if (isPlaying) DesktopColors.Obsidian else DesktopColors.Carbon
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+
+    val borderColor = DesktopColors.Border
+    val cardColor = when {
+        isCurrentSong -> DesktopColors.Obsidian
+        isHovered -> DesktopColors.Slate.copy(alpha = 0.45f)
+        else -> DesktopColors.Carbon
+    }
+    val handlePlayAction = {
+        if (isCurrentSong) {
+            onTogglePlayPause?.invoke() ?: onPlay()
+        } else {
+            onPlay()
+        }
+    }
+
     Card(
         shape = DesktopRadii.Button,
         colors = CardDefaults.cardColors(containerColor = cardColor),
         border = BorderStroke(1.dp, borderColor),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onPlay() },
+            .hoverable(interactionSource)
+            .clickable(interactionSource = interactionSource, indication = null) { handlePlayAction() }
+            .pointerHoverIcon(PointerIcon.Hand),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.size(50.dp)) {
+            // Gambar Lagu / Thumbnail (50dp x 50dp) dengan overlay play saat di-hover
+            Box(
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(DesktopRadii.Badge),
+                contentAlignment = Alignment.Center,
+            ) {
                 if (!song.thumbnailUrl.isNullOrBlank()) {
                     AsyncImage(
                         model = song.thumbnailUrl,
@@ -1573,14 +1756,12 @@ fun SongListItem(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(DesktopRadii.Badge)
                             .background(DesktopColors.Obsidian),
                     )
                 } else {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(DesktopRadii.Badge)
                             .background(DesktopColors.Obsidian),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -1588,16 +1769,31 @@ fun SongListItem(
                     }
                 }
 
-                if (isPlaying) {
+                // Saat di-hover: Muncul icon play (atau pause jika lagu sedang diputar)
+                if (isHovered) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(DesktopRadii.Badge)
+                            .background(Color.Black.copy(alpha = 0.55f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isCurrentSong && isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isCurrentSong && isPlaying) "Jeda Lagu" else if (isCurrentSong) "Lanjutkan Lagu" else "Putar Lagu",
+                            tint = if (isCurrentSong) DesktopColors.AcidLime else Color.White,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                } else if (isCurrentSong) {
+                    // Ketika tidak di-hover dan lagu sedang aktif, tampilkan equalizer
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
                             .background(Color.Black.copy(alpha = 0.6f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         PlayingEqualizerBars(
-                            isPlaying = true,
+                            isPlaying = isPlaying,
                             barColor = DesktopColors.AcidLime,
                             maxHeight = 20.dp,
                         )
@@ -1610,9 +1806,9 @@ fun SongListItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = song.title,
-                    fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
+                    fontWeight = if (isCurrentSong) FontWeight.Medium else FontWeight.Normal,
                     fontSize = 14.5.sp,
-                    color = if (isPlaying) DesktopColors.AcidLime else DesktopColors.Paper,
+                    color = if (isCurrentSong) DesktopColors.AcidLime else DesktopColors.Paper,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1647,61 +1843,24 @@ fun SongListItem(
                 modifier = Modifier.padding(horizontal = 14.dp),
             )
 
-            if (onToggleDownload != null) {
-                IconButton(
-                    onClick = onToggleDownload,
-                    enabled = !isDownloading,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = DesktopColors.Obsidian),
-                    modifier = Modifier.size(34.dp).clip(DesktopRadii.Button).border(BorderStroke(1.dp, DesktopColors.Border), DesktopRadii.Button),
-                ) {
-                    if (isDownloading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = DesktopColors.AcidLime,
-                            strokeWidth = 2.dp,
-                        )
-                    } else if (isDownloaded) {
-                        Icon(Icons.Default.DownloadDone, contentDescription = "Tersimpan Offline (Klik untuk Hapus)", tint = DesktopColors.AcidLime, modifier = Modifier.size(17.dp))
-                    } else {
-                        Icon(Icons.Default.Download, contentDescription = "Simpan Offline", tint = DesktopColors.Fog, modifier = Modifier.size(17.dp))
-                    }
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-            }
-
+            // Tombol Tambah ke Playlist
             if (onAddToPlaylist != null) {
                 IconButton(
                     onClick = onAddToPlaylist,
                     colors = IconButtonDefaults.iconButtonColors(containerColor = DesktopColors.Obsidian),
-                    modifier = Modifier.size(34.dp).clip(DesktopRadii.Button).border(BorderStroke(1.dp, DesktopColors.Border), DesktopRadii.Button),
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(DesktopRadii.Button)
+                        .border(BorderStroke(1.dp, DesktopColors.Border), DesktopRadii.Button)
+                        .pointerHoverIcon(PointerIcon.Hand),
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.PlaylistAdd,
                         contentDescription = "Tambahkan ke Playlist",
-                        tint = DesktopColors.Fog,
+                        tint = if (isHovered) DesktopColors.Paper else DesktopColors.Fog,
                         modifier = Modifier.size(17.dp),
                     )
                 }
-                Spacer(modifier = Modifier.width(6.dp))
-            }
-
-            IconButton(
-                onClick = onPlay,
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = if (isPlaying) DesktopColors.AcidLime else DesktopColors.Obsidian,
-                    contentColor = if (isPlaying) DesktopColors.Void else DesktopColors.Paper,
-                ),
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(DesktopRadii.Button)
-                    .border(BorderStroke(1.dp, if (isPlaying) DesktopColors.AcidLime else DesktopColors.Border), DesktopRadii.Button),
-            ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Jeda Lagu" else "Putar Lagu",
-                    tint = if (isPlaying) DesktopColors.Void else DesktopColors.Paper,
-                    modifier = Modifier.size(18.dp),
-                )
             }
         }
     }

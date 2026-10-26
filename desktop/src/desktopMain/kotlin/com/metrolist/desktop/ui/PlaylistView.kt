@@ -1266,12 +1266,20 @@ fun PlaylistDetailView(
                             isDownloading = isDownloading,
                             isLocal = pl.isLocal,
                             onRowClick = {
-                                val actualIndex = pl.songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-                                playbackManager.playPlaylist(pl, startIndex = actualIndex)
+                                if (isThisSongCurrent) {
+                                    playbackManager.togglePlayPause()
+                                } else {
+                                    val actualIndex = pl.songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+                                    playbackManager.playPlaylist(pl, startIndex = actualIndex)
+                                }
                             },
                             onPlayClick = {
-                                val actualIndex = pl.songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-                                playbackManager.playPlaylist(pl, startIndex = actualIndex)
+                                if (isThisSongCurrent) {
+                                    playbackManager.player.resume()
+                                } else {
+                                    val actualIndex = pl.songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+                                    playbackManager.playPlaylist(pl, startIndex = actualIndex)
+                                }
                             },
                             onPauseClick = {
                                 playbackManager.player.pause()
@@ -1635,7 +1643,7 @@ private fun PlaylistActionBar(
             Surface(
                 shape = DesktopRadii.Input,
                 color = DesktopColors.Obsidian,
-                border = BorderStroke(1.dp, if (searchQuery.isNotEmpty()) DesktopColors.AcidLime else DesktopColors.Border),
+                border = BorderStroke(1.dp, if (searchQuery.isNotEmpty()) DesktopColors.Smoke else DesktopColors.Border),
                 modifier = Modifier
                     .width(220.dp)
                     .height(34.dp),
@@ -1649,7 +1657,7 @@ private fun PlaylistActionBar(
                     Icon(
                         Icons.Default.Search,
                         contentDescription = null,
-                        tint = if (searchQuery.isNotEmpty()) DesktopColors.AcidLime else DesktopColors.Ash,
+                        tint = if (searchQuery.isNotEmpty()) DesktopColors.Paper else DesktopColors.Ash,
                         modifier = Modifier.size(15.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1832,7 +1840,7 @@ private fun PlaylistSongRow(
         interactionSource = interactionSource,
         shape = DesktopRadii.Button,
         color = rowBg,
-        border = if (isCurrentPlaying) BorderStroke(1.dp, DesktopColors.AcidLime.copy(alpha = 0.35f)) else null,
+        border = null,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 28.dp, vertical = 2.dp),

@@ -26,6 +26,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.input.ImeAction
 import coil3.compose.AsyncImage
 import com.metrolist.desktop.model.DesktopPlaylist
 import com.metrolist.desktop.model.DesktopSong
@@ -80,6 +86,12 @@ fun AddSongDirectlyDialog(
         }
     }
 
+    val searchFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        searchFocusRequester.requestFocus()
+    }
+
     Dialog(onDismissRequest = onDismissRequest) {
         Card(
             shape = DesktopRadii.Card,
@@ -89,7 +101,13 @@ fun AddSongDirectlyDialog(
                 .widthIn(max = 620.dp)
                 .fillMaxWidth(0.94f)
                 .heightIn(max = 680.dp)
-                .padding(12.dp),
+                .padding(12.dp)
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Escape) {
+                        onDismissRequest()
+                        true
+                    } else false
+                },
         ) {
             Column(modifier = Modifier.padding(24.dp).fillMaxSize()) {
                 // Header
@@ -144,6 +162,8 @@ fun AddSongDirectlyDialog(
                         onValueChange = { query = it },
                         placeholder = { Text("Cari lagu, artis, atau album di YouTube Music...", fontSize = 13.sp, color = DesktopColors.Fog) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { performSearch() }),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = DesktopColors.AcidLime,
                             unfocusedBorderColor = DesktopColors.Border,
@@ -154,7 +174,15 @@ fun AddSongDirectlyDialog(
                             cursorColor = DesktopColors.AcidLime,
                         ),
                         shape = DesktopRadii.Input,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(searchFocusRequester)
+                            .onPreviewKeyEvent { keyEvent ->
+                                if (keyEvent.type == KeyEventType.KeyDown && (keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter)) {
+                                    performSearch()
+                                    true
+                                } else false
+                            },
                         trailingIcon = {
                             if (query.isNotEmpty()) {
                                 IconButton(onClick = { query = ""; searchResults = emptyList() }) {

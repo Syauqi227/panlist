@@ -52,6 +52,7 @@ import com.metrolist.desktop.betterlyrics.TTMLParser
 import kotlinx.serialization.json.intOrNull
 class DesktopMusicRepository {
     val localStore: LocalPlaylistStore = LocalPlaylistStore()
+    val recentSearchStore: RecentSearchStore = RecentSearchStore()
     val downloadManager: OfflineDownloadManager = OfflineDownloadManager()
 
 
@@ -149,6 +150,13 @@ class DesktopMusicRepository {
                 album = song.album?.name,
             )
         } ?: emptyList()
+    }
+
+    suspend fun getQuerySuggestions(query: String): List<String> = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext emptyList()
+        runCatching {
+            YouTube.searchSuggestions(query).getOrNull()?.queries ?: emptyList()
+        }.getOrDefault(emptyList())
     }
 
     suspend fun getHomeQuickPicks(category: String = "Semua"): List<DesktopSong> = withContext(Dispatchers.IO) {

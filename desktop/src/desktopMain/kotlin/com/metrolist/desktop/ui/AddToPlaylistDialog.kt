@@ -3,6 +3,14 @@ package com.metrolist.desktop.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,13 +48,83 @@ fun AddToPlaylistDialog(
 ) {
     var newPlaylistTitle by remember { mutableStateOf("") }
     var isCreatingNew by remember { mutableStateOf(false) }
+    var selectedPlaylistIndex by remember { mutableStateOf(if (playlists.isNotEmpty()) 0 else -1) }
+
+    val dialogFocusRequester = remember { FocusRequester() }
+    val newPlaylistFocusRequester = remember { FocusRequester() }
+
+    val handleCreateNew = {
+        if (newPlaylistTitle.isNotBlank()) {
+            onCreateNewPlaylistAndAdd(newPlaylistTitle.trim())
+            newPlaylistTitle = ""
+            isCreatingNew = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        dialogFocusRequester.requestFocus()
+    }
+
+    LaunchedEffect(isCreatingNew) {
+        if (isCreatingNew) {
+            newPlaylistFocusRequester.requestFocus()
+        } else {
+            dialogFocusRequester.requestFocus()
+        }
+    }
 
     Dialog(onDismissRequest = onDismissRequest) {
         Card(
             shape = DesktopRadii.Card,
             colors = CardDefaults.cardColors(containerColor = DesktopColors.Obsidian),
             border = BorderStroke(1.dp, DesktopColors.Border),
-            modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(0.92f).padding(16.dp),
+            modifier = Modifier
+                .widthIn(max = 480.dp)
+                .fillMaxWidth(0.92f)
+                .padding(16.dp)
+                .focusRequester(dialogFocusRequester)
+                .focusable()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown) {
+                        when (keyEvent.key) {
+                            Key.Enter, Key.NumPadEnter -> {
+                                if (isCreatingNew) {
+                                    handleCreateNew()
+                                    true
+                                } else if (selectedPlaylistIndex in playlists.indices) {
+                                    onSelectPlaylist(playlists[selectedPlaylistIndex])
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            Key.DirectionDown -> {
+                                if (!isCreatingNew && playlists.isNotEmpty()) {
+                                    selectedPlaylistIndex = (selectedPlaylistIndex + 1).coerceAtMost(playlists.lastIndex)
+                                    true
+                                } else false
+                            }
+                            Key.DirectionUp -> {
+                                if (!isCreatingNew && playlists.isNotEmpty()) {
+                                    selectedPlaylistIndex = (selectedPlaylistIndex - 1).coerceAtLeast(0)
+                                    true
+                                } else false
+                            }
+                            Key.Escape -> {
+                                if (isCreatingNew) {
+                                    isCreatingNew = false
+                                    true
+                                } else {
+                                    onDismissRequest()
+                                    true
+                                }
+                            }
+                            else -> false
+                        }
+                    } else {
+                        false
+                    }
+                },
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 // Header: Dialog Title & Close Button
@@ -142,6 +220,8 @@ fun AddToPlaylistDialog(
                             onValueChange = { newPlaylistTitle = it },
                             placeholder = { Text("Nama playlist baru...", fontSize = 13.sp, color = DesktopColors.Fog) },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { handleCreateNew() }),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = DesktopColors.AcidLime,
                                 unfocusedBorderColor = DesktopColors.Border,
@@ -151,18 +231,25 @@ fun AddToPlaylistDialog(
                                 unfocusedContainerColor = DesktopColors.Carbon,
                                 cursorColor = DesktopColors.AcidLime,
                             ),
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(newPlaylistFocusRequester)
+                                .onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown && (keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter)) {
+                                        handleCreateNew()
+                                        true
+                                    } else if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Escape) {
+                                        isCreatingNew = false
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                },
                             shape = DesktopRadii.Input,
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
-                            onClick = {
-                                if (newPlaylistTitle.isNotBlank()) {
-                                    onCreateNewPlaylistAndAdd(newPlaylistTitle.trim())
-                                    newPlaylistTitle = ""
-                                    isCreatingNew = false
-                                }
-                            },
+                            onClick = { handleCreateNew() },
                             enabled = newPlaylistTitle.isNotBlank(),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = DesktopColors.AcidLime,
@@ -225,17 +312,30 @@ fun AddToPlaylistDialog(
                             .heightIn(max = 240.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        items(playlists) { pl ->
+                        itemsIndexed(playlists) { index, pl ->
                             val alreadyInPlaylist = pl.songs.any { it.id == song.id }
+                            val isSelected = (!isCreatingNew && index == selectedPlaylistIndex)
                             Card(
                                 shape = DesktopRadii.Button,
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (alreadyInPlaylist) DesktopColors.Obsidian else DesktopColors.Carbon
+                                    containerColor = when {
+                                        isSelected -> DesktopColors.Slate.copy(alpha = 0.6f)
+                                        alreadyInPlaylist -> DesktopColors.Obsidian
+                                        else -> DesktopColors.Carbon
+                                    }
                                 ),
-                                border = BorderStroke(1.dp, if (alreadyInPlaylist) DesktopColors.BorderSubtle else DesktopColors.Border),
+                                border = BorderStroke(
+                                    1.dp,
+                                    when {
+                                        isSelected -> DesktopColors.Smoke
+                                        alreadyInPlaylist -> DesktopColors.BorderSubtle
+                                        else -> DesktopColors.Border
+                                    }
+                                ),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
+                                        selectedPlaylistIndex = index
                                         onSelectPlaylist(pl)
                                     },
                             ) {

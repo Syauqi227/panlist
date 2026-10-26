@@ -60,7 +60,13 @@
 ## <a id="requirements"></a>Requirements
 
 - **Operating System:** Windows 10 or Windows 11 (64-bit)
-- **VLC Media Player (64-bit):** Required on the system for the LibVLC (`vlcj`) audio engine
+- **VLC Media Player (64-bit):** Required on the system for the LibVLC (`vlcj`) audio playback engine.
+  - **Download Link:** [Official VideoLAN Website](https://www.videolan.org/vlc/) | [Direct Download (64-bit Installer)](https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe)
+  - **How to Download:**
+    1. Visit [videolan.org/vlc](https://www.videolan.org/vlc/).
+    2. Click the dropdown arrow (**▼**) next to the orange **"Download VLC"** button.
+    3. Select **"Windows 64bit"** *(ensure it is 64-bit; 32-bit versions are incompatible with 64-bit JVM)*.
+    4. Run the installer to completion with default settings, then restart Echo.
 - **For Development / Building from Source:** JDK 21 (JetBrains Runtime 21 recommended for custom window decorations)
 
 ---

@@ -125,6 +125,16 @@ compose.desktop {
     }
 }
 
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+    val jbrHome = project.findProperty("jbr.home") as? String
+        ?: System.getenv("JBR_HOME")
+        ?: "${System.getProperty("user.home")}/.jdks/jbr-21.0.6"
+    val jbrJava = file("$jbrHome/bin/java.exe")
+    if (jbrJava.exists()) {
+        setExecutable(jbrJava.absolutePath)
+    }
+}
+
 val generateUpdateManifest = tasks.register("generateUpdateManifest") {
     dependsOn("createDistributable")
     val version = appVersion
