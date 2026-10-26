@@ -29,11 +29,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Java 21
+      - name: Setup Java 21 (JetBrains Runtime)
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'jetbrains'
           java-version: '21'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -50,10 +52,10 @@ jobs:
               $tagName = $tag
           } elseif ($inputBuild -ne "") {
               $buildNumber = $inputBuild
-              $tagName = "v1.3.0-b$buildNumber"
+              $tagName = "v1.3.1-b$buildNumber"
           } else {
               $buildNumber = "${{ github.run_number }}"
-              $tagName = "v1.3.0-b$buildNumber"
+              $tagName = "v1.3.1-b$buildNumber"
           }
 
           Write-Host "Build Number: $buildNumber"
@@ -98,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $releaseDir = "desktop/build/update-release-files"
-          $msiFile = "desktop/build/compose/binaries/main/msi/Echo-1.3.0.msi"
+          $msiFile = (Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -ExpandProperty FullName -First 1)
 
           if (-not (Test-Path $releaseDir)) {
               Write-Error "Direktori $releaseDir tidak ditemukan!"
@@ -124,7 +126,7 @@ jobs:
 
           $inputNotes = "${{ github.event.inputs.release_notes }}"
           $notes = if ($inputNotes -ne "") { $inputNotes } else { "Pembaruan otomatis Echo Desktop Build $buildNum" }
-          $title = "Echo 1.3.0 (Build $buildNum)"
+          $title = "Echo 1.3.1 (Build $buildNum)"
 
           $files = Get-ChildItem -Path $releaseDir -File | Select-Object -ExpandProperty FullName
 
