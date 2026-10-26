@@ -1156,11 +1156,13 @@ private fun FrameWindowScope.DesktopTopBar(
             }
 
             // Right: Window Control Buttons (Minimize, Maximize / Restore, Close)
-            Row(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .then(if (customTitleBar != null) Modifier.titleBarClient(customTitleBar) else Modifier)
-                    .fillMaxHeight(),
+            // Render only when customTitleBar is present to avoid double controls on vanilla JRE
+            if (customTitleBar != null) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .titleBarClient(customTitleBar)
+                        .fillMaxHeight(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                 WindowControlButton(
@@ -1254,6 +1256,7 @@ private fun FrameWindowScope.DesktopTopBar(
                         )
                     }
                 }
+            }
             }
         }
     }

@@ -98,8 +98,9 @@ compose.desktop {
 
         val jbrHome = project.findProperty("jbr.home") as? String
             ?: System.getenv("JBR_HOME")
+            ?: System.getenv("JAVA_HOME")
             ?: "${System.getProperty("user.home")}/.jdks/jbr-21.0.6"
-        if (file(jbrHome).exists()) {
+        if (jbrHome != null && file(jbrHome).exists() && (file("$jbrHome/bin/java.exe").exists() || file("$jbrHome/bin/java").exists())) {
             javaHome = jbrHome
         }
 
