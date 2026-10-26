@@ -130,6 +130,7 @@ import com.metrolist.desktop.ui.UpdateDialog
 import com.metrolist.desktop.ui.SongListSkeleton
 import com.metrolist.desktop.updater.DesktopReleaseInfo
 import com.metrolist.desktop.updater.DesktopUpdater
+import com.metrolist.desktop.updater.UpdaterPreferences
 import com.metrolist.desktop.discord.DesktopDiscordRpc
 import com.jetbrains.JBR
 import com.jetbrains.WindowDecorations
@@ -426,20 +427,26 @@ fun FrameWindowScope.DesktopMainView(
     val selectedDeviceId by DeviceDiscoveryService.selectedDeviceId.collectAsState()
 
     LaunchedEffect(Unit) {
-        scope.launch {
-            try {
-                val result = DesktopUpdater.checkForUpdate()
-                val update = result.getOrNull()
-                if (update != null) {
+        if (!UpdaterPreferences.autoCheck) return@LaunchedEffect
+        try {
+            val result = DesktopUpdater.checkForUpdate()
+            val update = result.getOrNull()
+            if (update != null) {
+                if (update.tagName != UpdaterPreferences.dismissedTag) {
                     availableUpdate = update
-                    DesktopUpdater.showDesktopNotification(
-                        title = "Pembaruan Tersedia!",
-                        message = "Versi ${update.versionName} tersedia untuk Echo."
-                    )
+                    // Unduh otomatis di latar belakang
+                    DesktopUpdater.downloadAndStageUpdate(update)
+                    if (DesktopUpdater.isUpdateStaged.value && UpdaterPreferences.notifications) {
+                        DesktopUpdater.showDesktopNotification(
+                            title = "Pembaruan Siap Dipasang!",
+                            message = "Versi ${update.versionName} siap dipasang. Klik untuk me-restart Echo.",
+                            onNotificationClick = { DesktopUpdater.applyUpdateAndRestart() }
+                        )
+                    }
                 }
-            } catch (_: Throwable) {
-                // Ignore silent update errors
             }
+        } catch (_: Throwable) {
+            // Ignore silent update errors
         }
     }
 
@@ -1709,8 +1716,12 @@ fun SettingsView(
     onCheckForUpdate: () -> Unit = {},
     onOpenConnectFlyout: (() -> Unit)? = null,
 ) {
-    val isDiscordConnected by discordRpc?.isConnected?.collectAsState() ?: remember { mutableStateOf(false) }
     val isDiscordEnabled by discordRpc?.isEnabled?.collectAsState() ?: remember { mutableStateOf(false) }
+    var autoCheckEnabled by remember { mutableStateOf(UpdaterPreferences.autoCheck) }
+    var notificationsEnabled by remember { mutableStateOf(UpdaterPreferences.notifications) }
+    val isUpdateStaged by DesktopUpdater.isUpdateStaged.collectAsState()
+    val isDownloadingUpdate by DesktopUpdater.isDownloadingUpdate.collectAsState()
+    val updateProgress by DesktopUpdater.updateDownloadProgress.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize().padding(28.dp).verticalScroll(rememberScrollState())) {
         Text("Pengaturan & Informasi Sistem", fontSize = 24.sp, fontWeight = FontWeight.Medium, color = DesktopColors.Paper)
@@ -1732,36 +1743,7 @@ fun SettingsView(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Discord Rich Presence", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(DesktopRadii.Badge)
-                                    .background(if (isDiscordConnected) DesktopColors.AcidLime.copy(alpha = 0.15f) else DesktopColors.Obsidian)
-                                    .border(
-                                        BorderStroke(1.dp, if (isDiscordConnected) DesktopColors.AcidLime else DesktopColors.Border),
-                                        DesktopRadii.Badge
-                                    )
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(if (isDiscordConnected) DesktopColors.AcidLime else DesktopColors.Fog)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isDiscordConnected) "Terhubung ke Discord" else "Menunggu Discord...",
-                                        fontSize = 11.sp,
-                                        color = if (isDiscordConnected) DesktopColors.AcidLime else DesktopColors.Fog,
-                                        fontWeight = FontWeight.Medium,
-                                    )
-                                }
-                            }
-                        }
+                        Text("Discord Rich Presence", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
                     }
 
                     Switch(
@@ -1795,45 +1777,10 @@ fun SettingsView(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Transmisi Nirkabel & Cast to TV", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(DesktopRadii.Badge)
-                                    .background(DesktopColors.AcidLime.copy(alpha = 0.15f))
-                                    .border(BorderStroke(1.dp, DesktopColors.AcidLime), DesktopRadii.Badge)
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    "Miracast / Wi-Fi",
-                                    fontSize = 11.sp,
-                                    color = DesktopColors.AcidLime,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            }
-                        }
+                        Text("Transmisi Nirkabel & Cast to TV", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { WindowsCastHelper.openBluetoothSettings() },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DesktopColors.Paper),
-                            border = BorderStroke(1.dp, DesktopColors.Border),
-                            shape = DesktopRadii.Button,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                        ) {
-                            Icon(
-                                Icons.Default.Bluetooth,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp),
-                                tint = DesktopColors.Fog,
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Bluetooth", fontSize = 12.sp)
-                        }
-
                         Button(
                             onClick = {
                                 if (onOpenConnectFlyout != null) {
@@ -1935,28 +1882,33 @@ fun SettingsView(
                             color = DesktopColors.Fog,
                             fontSize = 12.5.sp,
                         )
+                        if (isUpdateStaged) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Pembaruan siap dipasang!",
+                                color = DesktopColors.AcidLime,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        } else if (isDownloadingUpdate) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Mengunduh pembaruan di latar belakang (${(updateProgress * 100).toInt()}%)...",
+                                color = DesktopColors.Mist,
+                                fontSize = 12.sp,
+                            )
+                        }
                     }
 
-                    Button(
-                        onClick = onCheckForUpdate,
-                        enabled = !isCheckingForUpdate,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = DesktopColors.AcidLime,
-                            contentColor = DesktopColors.Void,
-                            disabledContainerColor = DesktopColors.Obsidian,
-                            disabledContentColor = DesktopColors.Fog,
-                        ),
-                        shape = DesktopRadii.Badge,
-                    ) {
-                        if (isCheckingForUpdate) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                color = DesktopColors.Fog,
-                                strokeWidth = 2.dp,
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Memeriksa...", fontSize = 12.sp, color = DesktopColors.Fog)
-                        } else {
+                    if (isUpdateStaged) {
+                        Button(
+                            onClick = { DesktopUpdater.applyUpdateAndRestart() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DesktopColors.AcidLime,
+                                contentColor = DesktopColors.Void,
+                            ),
+                            shape = DesktopRadii.Badge,
+                        ) {
                             Icon(
                                 Icons.Default.Refresh,
                                 contentDescription = null,
@@ -1965,13 +1917,140 @@ fun SettingsView(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                "Periksa Pembaruan",
+                                "Restart Echo untuk Memperbarui",
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontWeight = FontWeight.Bold,
                                 color = DesktopColors.Void,
                             )
                         }
+                    } else if (isDownloadingUpdate) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                progress = { updateProgress },
+                                modifier = Modifier.size(16.dp),
+                                color = DesktopColors.AcidLime,
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("${(updateProgress * 100).toInt()}%", fontSize = 12.sp, color = DesktopColors.AcidLime)
+                        }
+                    } else {
+                        Button(
+                            onClick = onCheckForUpdate,
+                            enabled = !isCheckingForUpdate,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DesktopColors.AcidLime,
+                                contentColor = DesktopColors.Void,
+                                disabledContainerColor = DesktopColors.Obsidian,
+                                disabledContentColor = DesktopColors.Fog,
+                            ),
+                            shape = DesktopRadii.Badge,
+                        ) {
+                            if (isCheckingForUpdate) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = DesktopColors.Fog,
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Memeriksa...", fontSize = 12.sp, color = DesktopColors.Fog)
+                            } else {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = DesktopColors.Void,
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Periksa Pembaruan",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = DesktopColors.Void,
+                                )
+                            }
+                        }
                     }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 16.dp),
+                    color = DesktopColors.Border,
+                )
+
+                // Saklar 1: Cek otomatis
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(
+                            "Cek pembaruan otomatis saat start",
+                            color = DesktopColors.Paper,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            "Memeriksa versi baru Echo secara otomatis saat aplikasi dibuka",
+                            color = DesktopColors.Fog,
+                            fontSize = 12.sp,
+                        )
+                    }
+
+                    Switch(
+                        checked = autoCheckEnabled,
+                        onCheckedChange = { checked ->
+                            autoCheckEnabled = checked
+                            UpdaterPreferences.autoCheck = checked
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = DesktopColors.Void,
+                            checkedTrackColor = DesktopColors.AcidLime,
+                            uncheckedThumbColor = DesktopColors.Fog,
+                            uncheckedTrackColor = DesktopColors.Obsidian,
+                        ),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Saklar 2: Notifikasi update
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(
+                            "Notifikasi pembaruan",
+                            color = if (autoCheckEnabled) DesktopColors.Paper else DesktopColors.Fog,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            "Menampilkan notifikasi sistem saat pembaruan tersedia",
+                            color = DesktopColors.Fog,
+                            fontSize = 12.sp,
+                        )
+                    }
+
+                    Switch(
+                        checked = notificationsEnabled && autoCheckEnabled,
+                        enabled = autoCheckEnabled,
+                        onCheckedChange = { checked ->
+                            notificationsEnabled = checked
+                            UpdaterPreferences.notifications = checked
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = DesktopColors.Void,
+                            checkedTrackColor = DesktopColors.AcidLime,
+                            uncheckedThumbColor = DesktopColors.Fog,
+                            uncheckedTrackColor = DesktopColors.Obsidian,
+                        ),
+                    )
                 }
             }
         }

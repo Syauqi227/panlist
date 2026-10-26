@@ -1,0 +1,141 @@
+name: Release Echo Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'Nomor build internal (contoh: 2, 3, dst.)'
+        required: true
+        default: '2'
+      release_notes:
+        description: 'Catatan rilis (Changelog)'
+        required: false
+        default: 'Pembaruan otomatis Echo Desktop'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Determine Version, Build Number, and Tag
+        id: vars
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $inputBuild = "${{ github.event.inputs.build_number }}"
+
+          if ($tag -match "-b(\d+)$") {
+              $buildNumber = $matches[1]
+              $tagName = $tag
+          } elseif ($inputBuild -ne "") {
+              $buildNumber = $inputBuild
+              $tagName = "v1.3.0-b$buildNumber"
+          } else {
+              $buildNumber = "${{ github.run_number }}"
+              $tagName = "v1.3.0-b$buildNumber"
+          }
+
+          Write-Host "Build Number: $buildNumber"
+          Write-Host "Tag Name: $tagName"
+
+          "build_number=$buildNumber" >> $env:GITHUB_OUTPUT
+          "tag_name=$tagName" >> $env:GITHUB_OUTPUT
+
+      - name: Fetch previous release manifest (for differential update)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $prevManifest = "desktop/update-manifest-previous.json"
+          try {
+              $latest = gh api "repos/${{ github.repository }}/releases/latest" | ConvertFrom-Json
+              $manifestAsset = $latest.assets | Where-Object { $_.name -eq "update-manifest.json" }
+              if ($manifestAsset) {
+                  Write-Host "Mengunduh manifest rilis sebelumnya ($($latest.tag_name))..."
+                  Invoke-WebRequest -Uri $manifestAsset.browser_download_url -OutFile $prevManifest
+                  Write-Host "Manifest rilis sebelumnya berhasil diunduh ke $prevManifest."
+              } else {
+                  Write-Host "Tidak ada update-manifest.json di rilis latest. Akan membuat rilis dasar baru."
+              }
+          } catch {
+              Write-Host "Catatan: Tidak dapat mengunduh manifest sebelumnya. Melanjutkan sebagai rilis dasar."
+          }
+
+      - name: Build MSI and Generate Hybrid Update Manifest
+        shell: pwsh
+        run: |
+          $buildNum = "${{ steps.vars.outputs.build_number }}"
+          $prevManifest = "desktop/update-manifest-previous.json"
+
+          if (Test-Path $prevManifest) {
+              .\gradlew.bat :desktop:packageMsi :desktop:generateUpdateManifest "-Papp.build=$buildNum" "-PpreviousManifest=$prevManifest" --stacktrace
+          } else {
+              .\gradlew.bat :desktop:packageMsi :desktop:generateUpdateManifest "-Papp.build=$buildNum" --stacktrace
+          }
+
+      - name: Prepare Release Assets
+        shell: pwsh
+        run: |
+          $releaseDir = "desktop/build/update-release-files"
+          $msiFile = "desktop/build/compose/binaries/main/msi/Echo-1.3.0.msi"
+
+          if (-not (Test-Path $releaseDir)) {
+              Write-Error "Direktori $releaseDir tidak ditemukan!"
+              exit 1
+          }
+
+          if (Test-Path $msiFile) {
+              Copy-Item $msiFile -Destination $releaseDir -Force
+              Write-Host "MSI installer berhasil disalin ke $releaseDir"
+          }
+
+          Write-Host "Daftar aset rilis yang siap diunggah:"
+          Get-ChildItem $releaseDir | Select-Object Name, Length
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tagName = "${{ steps.vars.outputs.tag_name }}"
+          $buildNum = "${{ steps.vars.outputs.build_number }}"
+          $releaseDir = "desktop/build/update-release-files"
+
+          $inputNotes = "${{ github.event.inputs.release_notes }}"
+          $notes = if ($inputNotes -ne "") { $inputNotes } else { "Pembaruan otomatis Echo Desktop Build $buildNum" }
+          $title = "Echo 1.3.0 (Build $buildNum)"
+
+          $files = Get-ChildItem -Path $releaseDir -File | Select-Object -ExpandProperty FullName
+
+          # Cek apakah release sudah ada
+          $existing = gh release view $tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "Rilis $tagName sudah ada. Memperbarui aset..."
+              gh release upload $tagName @files --clobber
+          } else {
+              Write-Host "Membuat rilis baru $tagName..."
+              gh release create $tagName @files --title $title --notes $notes --latest
+          }
+
+          Write-Host "Rilis $tagName berhasil dipublikasikan ke GitHub!"

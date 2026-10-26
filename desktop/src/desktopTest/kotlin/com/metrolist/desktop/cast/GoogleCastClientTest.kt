@@ -1,5 +1,6 @@
 package com.metrolist.desktop.cast
 
+import org.junit.Assume
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -63,7 +64,13 @@ class GoogleCastClientTest {
         val sc = SSLContext.getInstance("TLS")
         sc.init(null, trustAll, SecureRandom())
 
-        val socket = sc.socketFactory.createSocket("192.168.1.5", 8009) as SSLSocket
+        val socket: SSLSocket = try {
+            sc.socketFactory.createSocket("192.168.1.5", 8009) as SSLSocket
+        } catch (e: Exception) {
+            Assume.assumeNoException("Google Cast hardware device 192.168.1.5:8009 not reachable in this environment", e)
+            return
+        }
+
         socket.soTimeout = 4000
 
         val out = socket.outputStream
