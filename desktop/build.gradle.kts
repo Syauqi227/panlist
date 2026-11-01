@@ -142,7 +142,7 @@ val generateUpdateManifest = tasks.register("generateUpdateManifest") {
     val build = appBuild
     val repoOwner = "Syauqi227"
     val repoName = "panlist"
-    val tagName = "v$version-b$build"
+    val tagName = "v$version"
     val releaseBaseUrl = "https://github.com/$repoOwner/$repoName/releases"
     val downloadBaseUrl = "$releaseBaseUrl/download/$tagName"
 

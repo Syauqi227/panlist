@@ -47,15 +47,16 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $inputBuild = "${{ github.event.inputs.build_number }}"
 
-          if ($tag -match "-b(\d+)$") {
-              $buildNumber = $matches[1]
-              $tagName = $tag
+          if ($tag -match "^v?(\d+\.\d+\.\d+)") {
+              $cleanVersion = $matches[1]
+              $tagName = "v$cleanVersion"
+              $buildNumber = if ($tag -match "-b(\d+)$") { $matches[1] } else { "1" }
           } elseif ($inputBuild -ne "") {
               $buildNumber = $inputBuild
-              $tagName = "v1.3.1-b$buildNumber"
+              $tagName = "v1.3.2"
           } else {
-              $buildNumber = "${{ github.run_number }}"
-              $tagName = "v1.3.1-b$buildNumber"
+              $buildNumber = "1"
+              $tagName = "v1.3.2"
           }
 
           Write-Host "Build Number: $buildNumber"
@@ -124,9 +125,10 @@ jobs:
           $buildNum = "${{ steps.vars.outputs.build_number }}"
           $releaseDir = "desktop/build/update-release-files"
 
+          $cleanVersion = $tagName.TrimStart("v").Split("-")[0]
           $inputNotes = "${{ github.event.inputs.release_notes }}"
-          $notes = if ($inputNotes -ne "") { $inputNotes } else { "Pembaruan otomatis Echo Desktop Build $buildNum" }
-          $title = "Echo 1.3.1 (Build $buildNum)"
+          $notes = if ($inputNotes -ne "") { $inputNotes } else { "Pembaruan Echo Desktop v$cleanVersion" }
+          $title = "Echo $cleanVersion"
 
           $files = Get-ChildItem -Path $releaseDir -File | Select-Object -ExpandProperty FullName
 
