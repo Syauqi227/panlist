@@ -4,6 +4,7 @@ import com.metrolist.desktop.cast.GoogleCastManager
 import com.metrolist.desktop.model.DesktopPlaylist
 import com.metrolist.desktop.model.DesktopSong
 import com.metrolist.desktop.repository.DesktopMusicRepository
+import com.metrolist.desktop.repository.LastPlaybackStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,7 +24,9 @@ class DesktopPlaybackManager(
     val player: VlcAudioPlayer,
     val repository: DesktopMusicRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    val lastPlaybackStore: LastPlaybackStore = LastPlaybackStore(),
 ) {
+    private var hasLoadedMediaInSession: Boolean = false
     private val _queue = MutableStateFlow<List<DesktopSong>>(emptyList())
     val queue: StateFlow<List<DesktopSong>> = _queue.asStateFlow()
 
@@ -92,6 +95,19 @@ class DesktopPlaybackManager(
                 }
             }
         }
+
+        scope.launch {
+            val restored = lastPlaybackStore.loadLastPlayback()
+            if (restored != null && _currentSong.value == null) {
+                _currentSong.value = restored.currentSong
+                val q = if (restored.queue.isNotEmpty()) restored.queue else listOf(restored.currentSong)
+                unShuffledQueue = q
+                _queue.value = q
+                _currentIndex.value = restored.currentIndex.coerceIn(0, q.size - 1)
+                _currentPlaylistTitle.value = restored.playlistTitle
+                hasLoadedMediaInSession = false
+            }
+        }
     }
 
     val hasNext: Boolean
@@ -115,12 +131,39 @@ class DesktopPlaybackManager(
     fun playSong(song: DesktopSong, sourceQueue: List<DesktopSong> = listOf(song)) {
         val queueToUse = if (sourceQueue.any { it.id == song.id }) sourceQueue else listOf(song) + sourceQueue
         unShuffledQueue = queueToUse
-        _queue.value = queueToUse
-        _isShuffleEnabled.value = false
-        val index = queueToUse.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-        _currentIndex.value = index
         _currentSong.value = song
         _currentPlaylistTitle.value = null
+
+        if (_isShuffleEnabled.value) {
+            val otherSongs = queueToUse.filter { it.id != song.id }.shuffled()
+            val shuffledQueue = listOf(song) + otherSongs
+            _queue.value = shuffledQueue
+            _currentIndex.value = 0
+        } else {
+            _queue.value = queueToUse
+            val index = queueToUse.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+            _currentIndex.value = index
+        }
+
+        // Jika antrean hanya 1 lagu (misal diputar langsung dari search dropdown),
+        // otomatis ambil rekomendasi lagu terkait di latar belakang
+        if (queueToUse.size <= 1) {
+            scope.launch {
+                val related = repository.getRelatedSongs(song.id)
+                val currentQ = _queue.value
+                val currentQIds = currentQ.map { it.id }.toSet()
+                val newSongs = related.filter { !currentQIds.contains(it.id) }
+                if (newSongs.isNotEmpty()) {
+                    unShuffledQueue = unShuffledQueue + newSongs
+                    if (_isShuffleEnabled.value) {
+                        _queue.value = currentQ + newSongs.shuffled()
+                    } else {
+                        _queue.value = currentQ + newSongs
+                    }
+                }
+            }
+        }
+
         loadAndPlay(song)
     }
 
@@ -214,17 +257,36 @@ class DesktopPlaybackManager(
         val currIdx = _currentIndex.value
 
         if (newShuffle) {
-            // Preserve playback history: songs played before currIdx remain in the past
             val playedHistory = if (currIdx in q.indices) q.take(currIdx) else emptyList()
             val currentItem = if (currIdx in q.indices) q[currIdx] else current
             val upcoming = if (currIdx in q.indices) q.drop(currIdx + 1) else q.filter { it.id != current?.id }
 
-            // Only upcoming unplayed songs are shuffled
-            val shuffledUpcoming = upcoming.shuffled()
-            val newQueue = playedHistory + listOfNotNull(currentItem) + shuffledUpcoming
+            // Jika upcoming kosong namun ada lagu lain di unShuffledQueue (misal memilih lagu terakhir di pencarian),
+            // acak seluruh lagu lainnya ke dalam upcoming agar antrean tidak kosong
+            if (upcoming.isEmpty() && unShuffledQueue.size > 1) {
+                val otherSongs = unShuffledQueue.filter { it.id != currentItem?.id }.shuffled()
+                val newQueue = listOfNotNull(currentItem) + otherSongs
+                _queue.value = newQueue
+                _currentIndex.value = 0
+            } else {
+                val shuffledUpcoming = upcoming.shuffled()
+                val newQueue = playedHistory + listOfNotNull(currentItem) + shuffledUpcoming
+                _queue.value = newQueue
+                _currentIndex.value = playedHistory.size
+            }
 
-            _queue.value = newQueue
-            _currentIndex.value = playedHistory.size
+            // Jika antrean hanya 1 lagu, otomatis tarik lagu terkait dan acak
+            if (_queue.value.size <= 1 && currentItem != null) {
+                scope.launch {
+                    val related = repository.getRelatedSongs(currentItem.id)
+                    val existingIds = _queue.value.map { it.id }.toSet()
+                    val newSongs = related.filter { !existingIds.contains(it.id) }
+                    if (newSongs.isNotEmpty()) {
+                        unShuffledQueue = unShuffledQueue + newSongs
+                        _queue.value = _queue.value + newSongs.shuffled()
+                    }
+                }
+            }
         } else {
             _queue.value = unShuffledQueue
             _currentIndex.value = if (current != null) {
@@ -257,13 +319,43 @@ class DesktopPlaybackManager(
                 if (_currentIndex.value < _queue.value.size - 1) {
                     playNext()
                 } else {
-                    _statusMessage.value = "Pemutaran antrean playlist selesai."
+                    // Antrean habis: otomatis ambil radio/rekomendasi lagu lanjutan (Continuous Autoplay)
+                    val lastSong = _currentSong.value
+                    if (lastSong != null) {
+                        scope.launch {
+                            _statusMessage.value = "Memuat rekomendasi lagu..."
+                            val related = repository.getRelatedSongs(lastSong.id)
+                            val currentQueueIds = _queue.value.map { it.id }.toSet()
+                            val newSongs = related.filter { !currentQueueIds.contains(it.id) }
+                            if (newSongs.isNotEmpty()) {
+                                val toAdd = if (_isShuffleEnabled.value) newSongs.shuffled() else newSongs
+                                unShuffledQueue = unShuffledQueue + newSongs
+                                _queue.value = _queue.value + toAdd
+                                _statusMessage.value = null
+                                playNext()
+                            } else {
+                                _statusMessage.value = "Pemutaran antrean playlist selesai."
+                            }
+                        }
+                    } else {
+                        _statusMessage.value = "Pemutaran antrean playlist selesai."
+                    }
                 }
             }
         }
     }
 
     private fun loadAndPlay(song: DesktopSong) {
+        hasLoadedMediaInSession = true
+        scope.launch {
+            lastPlaybackStore.saveLastPlayback(
+                song = song,
+                queue = _queue.value,
+                currentIndex = _currentIndex.value,
+                playlistTitle = _currentPlaylistTitle.value,
+                positionMs = player.currentPosition.value,
+            )
+        }
         playbackJob?.cancel()
         playbackJob = scope.launch {
             // Debounce klik beruntun (spam next/previous/song) agar tidak membanjiri antrean & network
@@ -322,6 +414,11 @@ class DesktopPlaybackManager(
     }
 
     fun togglePlayPause() {
+        if (!player.isPlaying.value && !hasLoadedMediaInSession && _currentSong.value != null) {
+            loadAndPlay(_currentSong.value!!)
+            return
+        }
+
         if (GoogleCastManager.isConnected.value) {
             if (player.isPlaying.value) {
                 GoogleCastManager.pause()
@@ -343,6 +440,11 @@ class DesktopPlaybackManager(
     }
 
     fun resume() {
+        if (!player.isPlaying.value && !hasLoadedMediaInSession && _currentSong.value != null) {
+            loadAndPlay(_currentSong.value!!)
+            return
+        }
+
         if (GoogleCastManager.isConnected.value) {
             GoogleCastManager.resume()
         }

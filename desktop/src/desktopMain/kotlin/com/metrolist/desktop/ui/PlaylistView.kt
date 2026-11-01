@@ -22,6 +22,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.hoverable
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
@@ -226,6 +231,9 @@ private fun PlaylistOverviewView(
 
     var playlistToDelete by remember { mutableStateOf<DesktopPlaylist?>(null) }
     var playlistToAddSongDirectly by remember { mutableStateOf<DesktopPlaylist?>(null) }
+
+    val currentPlaylistTitle by playbackManager.currentPlaylistTitle.collectAsState()
+    val isPlaying by playbackManager.player.isPlaying.collectAsState()
 
 
     val scope = rememberCoroutineScope()
@@ -675,7 +683,8 @@ private fun PlaylistOverviewView(
                             details?.let { playbackManager.playPlaylist(it) }
                         }
                     },
-                    onDelete = null,
+                    currentPlaylistTitle = currentPlaylistTitle,
+                    isPlaying = isPlaying,
                 )
             }
             return
@@ -733,18 +742,8 @@ private fun PlaylistOverviewView(
                             details?.let { playbackManager.playPlaylist(it) }
                         }
                     },
-                    onAddSongDirectly = { plSummary ->
-                        val local = localPlaylists.find { it.id == plSummary.id }
-                        if (local != null) {
-                            playlistToAddSongDirectly = local
-                        }
-                    },
-                    onDelete = { plSummary ->
-                        val local = localPlaylists.find { it.id == plSummary.id }
-                        if (local != null) {
-                            playlistToDelete = local
-                        }
-                    },
+                    currentPlaylistTitle = currentPlaylistTitle,
+                    isPlaying = isPlaying,
                     onLoadMore = if (selectedCategoryIndex in listOf(0, 3) && searchQuery.isBlank()) {
                         { loadMorePlaylists() }
                     } else null,
@@ -760,8 +759,8 @@ private fun PlaylistGrid(
     playlists: List<DesktopPlaylistSummary>,
     onSelect: (String) -> Unit,
     onPlay: (DesktopPlaylistSummary) -> Unit,
-    onAddSongDirectly: ((DesktopPlaylistSummary) -> Unit)? = null,
-    onDelete: ((DesktopPlaylistSummary) -> Unit)? = null,
+    currentPlaylistTitle: String? = null,
+    isPlaying: Boolean = false,
     onLoadMore: (() -> Unit)? = null,
     isLoadingMore: Boolean = false,
 ) {
@@ -794,13 +793,27 @@ private fun PlaylistGrid(
             key = { it.id },
             contentType = { "playlist_summary_card" },
         ) { pl ->
+            val interactionSource = remember { MutableInteractionSource() }
+            val isHovered by interactionSource.collectIsHoveredAsState()
+            val isCurrentPlaylistPlaying = remember(currentPlaylistTitle, isPlaying, pl.title) {
+                currentPlaylistTitle == pl.title && isPlaying
+            }
+
             Card(
                 shape = DesktopRadii.Card,
-                colors = CardDefaults.cardColors(containerColor = DesktopColors.Carbon),
-                border = BorderStroke(1.dp, DesktopColors.Border),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isHovered) DesktopColors.Slate.copy(alpha = 0.5f) else DesktopColors.Carbon
+                ),
+                border = BorderStroke(1.dp, if (isHovered) DesktopColors.Smoke else DesktopColors.Border),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onSelect(pl.id) },
+                    .hoverable(interactionSource)
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = { onSelect(pl.id) }
+                    )
+                    .pointerHoverIcon(PointerIcon.Hand),
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Box(
@@ -831,70 +844,53 @@ private fun PlaylistGrid(
                             }
                         }
 
-                        // Quick Play Button
-                        IconButton(
-                            onClick = { onPlay(pl) },
-                            colors = IconButtonDefaults.iconButtonColors(containerColor = DesktopColors.AcidLime),
+                        // Quick Play Button (Spotify-style Hover Effect)
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isHovered || isCurrentPlaylistPlaying,
+                            enter = fadeIn(tween(180)) + slideInVertically(tween(200), initialOffsetY = { it / 3 }),
+                            exit = fadeOut(tween(140)) + slideOutVertically(tween(160), targetOffsetY = { it / 3 }),
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
-                                .padding(8.dp)
-                                .size(36.dp),
+                                .padding(10.dp),
                         ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Putar", tint = DesktopColors.Void, modifier = Modifier.size(20.dp))
+                            Surface(
+                                onClick = { onPlay(pl) },
+                                shape = CircleShape,
+                                color = DesktopColors.AcidLime,
+                                shadowElevation = 8.dp,
+                                modifier = Modifier.size(40.dp),
+                            ) {
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                                    Icon(
+                                        imageVector = if (isCurrentPlaylistPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isCurrentPlaylistPlaying) "Jeda" else "Putar",
+                                        tint = DesktopColors.Void,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = pl.title,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 13.5.sp,
-                                color = DesktopColors.Paper,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "${pl.author ?: "YouTube"} • ${pl.songCountText ?: ""}",
-                                fontSize = 12.sp,
-                                color = DesktopColors.Fog,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (pl.isLocal && onAddSongDirectly != null) {
-                                IconButton(
-                                    onClick = { onAddSongDirectly(pl) },
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Add,
-                                        contentDescription = "Tambah lagu langsung",
-                                        tint = DesktopColors.AcidLime,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(4.dp))
-                            }
-
-                            if (pl.isLocal && onDelete != null) {
-                                IconButton(
-                                    onClick = { onDelete(pl) },
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = DesktopColors.Fog, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = pl.title,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.5.sp,
+                            color = if (isHovered) DesktopColors.Paper else DesktopColors.Bone,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${pl.author ?: "YouTube"} • ${pl.songCountText ?: ""}",
+                            fontSize = 12.sp,
+                            color = DesktopColors.Fog,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }

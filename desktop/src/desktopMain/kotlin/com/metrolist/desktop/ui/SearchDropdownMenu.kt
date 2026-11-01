@@ -52,7 +52,7 @@ fun SearchDropdownMenu(
     selectedIndex: Int,
     onItemsChanged: (List<DropdownItem>) -> Unit,
     onQuerySelected: (String) -> Unit,
-    onSongSelected: (DesktopSong) -> Unit,
+    onSongSelected: (DesktopSong, List<DesktopSong>) -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
     currentSongId: String? = null,
     isPlaying: Boolean = false,
@@ -227,7 +227,8 @@ fun SearchDropdownMenu(
                                 coroutineScope.launch {
                                     repository.recentSearchStore.addRecentSearch(songItem.song)
                                 }
-                                onSongSelected(songItem.song)
+                                val queueToUse = if (recentSongs.isNotEmpty()) recentSongs else quickPicks
+                                onSongSelected(songItem.song, queueToUse)
                             },
                             onRemove = {
                                 coroutineScope.launch {
@@ -305,7 +306,7 @@ fun SearchDropdownMenu(
                                             coroutineScope.launch {
                                                 repository.recentSearchStore.addRecentSearch(item.song)
                                             }
-                                            onSongSelected(item.song)
+                                            onSongSelected(item.song, searchSongResults)
                                         },
                                         onRemove = {},
                                         onAddToPlaylist = { onAddToPlaylist(item.song) },

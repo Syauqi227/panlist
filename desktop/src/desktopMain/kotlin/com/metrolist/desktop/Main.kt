@@ -629,11 +629,11 @@ fun FrameWindowScope.DesktopMainView(
                         activeSearchQuery = ""
                     },
                     repository = repository,
-                    onSongSelected = { song ->
+                    onSongSelected = { song, queue ->
                         if (currentSong?.id == song.id) {
                             playbackManager.togglePlayPause()
                         } else {
-                            playbackManager.playSong(song, listOf(song))
+                            playbackManager.playSong(song, queue)
                         }
                     },
                     onAddToPlaylist = { song ->
@@ -958,7 +958,7 @@ private fun FrameWindowScope.DesktopTopBar(
     onSearchSubmit: () -> Unit,
     onClearSearch: () -> Unit,
     repository: DesktopMusicRepository,
-    onSongSelected: (DesktopSong) -> Unit,
+    onSongSelected: (DesktopSong, List<DesktopSong>) -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
     currentSong: DesktopSong? = null,
     isPlaying: Boolean = false,
@@ -1141,7 +1141,9 @@ private fun FrameWindowScope.DesktopTopBar(
                                                                 topBarScope.launch {
                                                                     repository.recentSearchStore.addRecentSearch(item.song)
                                                                 }
-                                                                onSongSelected(item.song)
+                                                                val dropdownSongs = currentDropdownItems.filterIsInstance<com.metrolist.desktop.ui.DropdownItem.Song>().map { it.song }
+                                                                val queueToPass = if (dropdownSongs.isNotEmpty()) dropdownSongs else listOf(item.song)
+                                                                onSongSelected(item.song, queueToPass)
                                                                 showDropdown = false
                                                                 selectedIndex = -1
                                                             }
@@ -1229,8 +1231,8 @@ private fun FrameWindowScope.DesktopTopBar(
                                     showDropdown = false
                                     selectedIndex = -1
                                 },
-                                onSongSelected = { song ->
-                                    onSongSelected(song)
+                                onSongSelected = { song, queue ->
+                                    onSongSelected(song, queue)
                                     showDropdown = false
                                     selectedIndex = -1
                                 },

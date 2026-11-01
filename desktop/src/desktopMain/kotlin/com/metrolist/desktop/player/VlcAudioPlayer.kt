@@ -1,13 +1,12 @@
 package com.metrolist.desktop.player
 
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
 import uk.co.caprica.vlcj.player.base.MediaPlayer
@@ -17,6 +16,11 @@ import uk.co.caprica.vlcj.player.component.AudioPlayerComponent
 class VlcAudioPlayer(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default)
 ) {
+    private val playerExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "VlcAudioPlayer-Worker").apply { isDaemon = true }
+    }
+    private val playerDispatcher = playerExecutor.asCoroutineDispatcher()
+
     private var playerComponent: AudioPlayerComponent? = null
     val isAvailable: Boolean
 
@@ -40,8 +44,6 @@ class VlcAudioPlayer(
 
     private val _currentThumbnailUrl = MutableStateFlow<String?>(null)
     val currentThumbnailUrl: StateFlow<String?> = _currentThumbnailUrl.asStateFlow()
-
-    private var progressJob: Job? = null
 
     var onPlaybackFinished: (() -> Unit)? = null
 
@@ -70,24 +72,20 @@ class VlcAudioPlayer(
                 component.mediaPlayer().events().addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
                     override fun playing(mediaPlayer: MediaPlayer?) {
                         _isPlaying.value = true
-                        startProgressTracker()
                     }
 
                     override fun paused(mediaPlayer: MediaPlayer?) {
                         _isPlaying.value = false
-                        stopProgressTracker()
                     }
 
                     override fun stopped(mediaPlayer: MediaPlayer?) {
                         _isPlaying.value = false
                         _currentPosition.value = 0L
-                        stopProgressTracker()
                     }
 
                     override fun finished(mediaPlayer: MediaPlayer?) {
                         _isPlaying.value = false
                         _currentPosition.value = 0L
-                        stopProgressTracker()
                         onPlaybackFinished?.invoke()
                     }
 
@@ -97,10 +95,15 @@ class VlcAudioPlayer(
                         }
                     }
 
+                    override fun timeChanged(mediaPlayer: MediaPlayer?, newTime: Long) {
+                        if (newTime >= 0) {
+                            _currentPosition.value = newTime
+                        }
+                    }
+
                     override fun error(mediaPlayer: MediaPlayer?) {
                         System.err.println("VLC encountered an error during playback")
                         _isPlaying.value = false
-                        stopProgressTracker()
                     }
                 })
                 println("VLCJ Audio Engine initialized successfully with LibVLC!")
@@ -118,46 +121,59 @@ class VlcAudioPlayer(
         _currentThumbnailUrl.value = thumbnailUrl
         _currentPosition.value = 0L
 
-        playerComponent?.mediaPlayer()?.media()?.play(url)
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.media()?.play(url)
+        }
     }
 
     fun togglePlayPause() {
-        val player = playerComponent?.mediaPlayer() ?: return
-        if (player.status().isPlaying) {
-            player.controls().pause()
+        if (_isPlaying.value) {
+            pause()
         } else {
-            player.controls().play()
+            resume()
         }
     }
 
     fun pause() {
-        playerComponent?.mediaPlayer()?.controls()?.pause()
+        _isPlaying.value = false
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.controls()?.pause()
+        }
     }
 
     fun resume() {
-        playerComponent?.mediaPlayer()?.controls()?.play()
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.controls()?.play()
+        }
     }
+
     fun stop() {
-        playerComponent?.mediaPlayer()?.controls()?.stop()
         _isPlaying.value = false
         _currentPosition.value = 0L
-        stopProgressTracker()
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.controls()?.stop()
+        }
     }
 
-
     fun seekTo(positionMs: Long) {
-        playerComponent?.mediaPlayer()?.controls()?.setTime(positionMs)
         _currentPosition.value = positionMs
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.controls()?.setTime(positionMs)
+        }
     }
 
     fun setVolume(vol: Int) {
         val clamped = vol.coerceIn(0, 100)
         _volume.value = clamped
-        playerComponent?.mediaPlayer()?.audio()?.setVolume(clamped)
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.audio()?.setVolume(clamped)
+        }
     }
 
     fun setMute(muted: Boolean) {
-        playerComponent?.mediaPlayer()?.audio()?.setMute(muted)
+        scope.launch(playerDispatcher) {
+            playerComponent?.mediaPlayer()?.audio()?.setMute(muted)
+        }
     }
 
     fun isMuted(): Boolean {
@@ -165,29 +181,9 @@ class VlcAudioPlayer(
     }
 
     fun release() {
-        stopProgressTracker()
-        playerComponent?.release()
-    }
-
-    private fun startProgressTracker() {
-        progressJob?.cancel()
-        progressJob = scope.launch {
-            while (isActive) {
-                playerComponent?.mediaPlayer()?.let { mp ->
-                    if (mp.status().isPlaying) {
-                        val time = mp.status().time()
-                        if (time >= 0) {
-                            _currentPosition.value = time
-                        }
-                    }
-                }
-                delay(200)
-            }
+        scope.launch(playerDispatcher) {
+            playerComponent?.release()
+            playerExecutor.shutdown()
         }
-    }
-
-    private fun stopProgressTracker() {
-        progressJob?.cancel()
-        progressJob = null
     }
 }

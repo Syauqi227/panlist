@@ -137,6 +137,34 @@ class DesktopMusicRepository {
         }
     }
 
+    private fun SongItem.toDesktopSong(): DesktopSong {
+        return DesktopSong(
+            id = id,
+            title = title,
+            artist = artists.joinToString(", ") { it.name },
+            durationText = duration?.let { formatDuration(it) } ?: "--:--",
+            thumbnailUrl = thumbnail,
+            album = album?.name,
+        )
+    }
+
+    suspend fun getRelatedSongs(videoId: String): List<DesktopSong> = withContext(Dispatchers.IO) {
+        if (videoId.isBlank()) return@withContext emptyList()
+        try {
+            val nextResult = YouTube.next(WatchEndpoint(videoId = videoId)).getOrNull()
+            val songs = nextResult?.items?.map { it.toDesktopSong() }.orEmpty()
+            if (songs.isNotEmpty()) {
+                return@withContext songs
+            }
+
+            val queueResult = YouTube.queue(videoIds = listOf(videoId), playlistId = "RDAMVM$videoId").getOrNull()
+            queueResult?.map { it.toDesktopSong() }.orEmpty()
+        } catch (e: Throwable) {
+            System.err.println("Error fetching related songs for $videoId: ${e.message}")
+            emptyList()
+        }
+    }
+
     suspend fun searchSongs(query: String): List<DesktopSong> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
         val result = YouTube.search(query, YouTube.SearchFilter.FILTER_SONG).getOrNull()
