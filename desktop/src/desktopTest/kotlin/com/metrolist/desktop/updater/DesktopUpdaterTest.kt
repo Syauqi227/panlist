@@ -13,6 +13,14 @@ import java.security.MessageDigest
 class DesktopUpdaterTest {
 
     @Test
+    fun testCleanVersion() {
+        assertEquals("1.3.2", DesktopUpdater.cleanVersion("v1.3.2"))
+        assertEquals("1.3.2", DesktopUpdater.cleanVersion("1.3.2"))
+        assertEquals("1.3.2", DesktopUpdater.cleanVersion("v1.3.2-b1"))
+        assertEquals("1.3.2", DesktopUpdater.cleanVersion("1.3.2-b2"))
+    }
+
+    @Test
     fun testCompareVersions() {
         // v1 < v2 -> -1
         assertEquals(-1, DesktopUpdater.compareVersions("1.3.0", "1.3.1"))
@@ -35,6 +43,9 @@ class DesktopUpdaterTest {
         assertFalse(DesktopUpdater.isUpdateAvailable("1.3.0", "13.7.5"))
 
         assertTrue(DesktopUpdater.isUpdateAvailable("1.3.0", "1.3.1"))
+        assertTrue(DesktopUpdater.isUpdateAvailable("1.3.1", "1.3.2"))
+        assertFalse(DesktopUpdater.isUpdateAvailable("1.3.2", "1.3.2"))
+        assertTrue(DesktopUpdater.isUpdateAvailable("1.3.2", "1.3.3"))
         assertTrue(DesktopUpdater.isUpdateAvailable("1.3.0", "1.4.0"))
         assertTrue(DesktopUpdater.isUpdateAvailable("1.3.0", "14.0.0"))
         assertTrue(DesktopUpdater.isUpdateAvailable("1.3.0-beta", "1.3.0"))

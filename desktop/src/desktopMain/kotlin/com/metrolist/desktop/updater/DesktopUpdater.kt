@@ -116,6 +116,32 @@ object DesktopUpdater {
     private val _stagedReleaseInfo = MutableStateFlow<DesktopReleaseInfo?>(null)
     val stagedReleaseInfo: StateFlow<DesktopReleaseInfo?> = _stagedReleaseInfo.asStateFlow()
 
+    private val _detectedUpdate = MutableStateFlow<DesktopReleaseInfo?>(null)
+    val detectedUpdate: StateFlow<DesktopReleaseInfo?> = _detectedUpdate.asStateFlow()
+
+    private val _isCheckingUpdate = MutableStateFlow(false)
+    val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
+
+    fun setDetectedUpdate(info: DesktopReleaseInfo?) {
+        _detectedUpdate.value = info
+    }
+
+    fun dismissDetectedUpdate() {
+        val current = _detectedUpdate.value
+        if (current != null) {
+            UpdaterPreferences.dismissedTag = current.tagName
+        }
+        _detectedUpdate.value = null
+    }
+
+    fun setCheckingUpdate(checking: Boolean) {
+        _isCheckingUpdate.value = checking
+    }
+
+    fun cleanVersion(tagOrVersion: String): String {
+        return tagOrVersion.removePrefix("v").substringBefore("-b").trim()
+    }
+
     var activeStagedUpdate: StagedUpdate? = null
         private set
 
@@ -214,7 +240,7 @@ object DesktopUpdater {
     internal fun parseRelease(jsonString: String): DesktopReleaseInfo? {
         val root = json.parseToJsonElement(jsonString).jsonObject
         val tagName = root["tag_name"]?.jsonPrimitive?.content ?: return null
-        val versionName = tagName.removePrefix("v").substringBefore("-b")
+        val versionName = cleanVersion(tagName)
         val title = root["name"]?.jsonPrimitive?.content ?: tagName
         val description = root["body"]?.jsonPrimitive?.content ?: ""
         val releaseUrl = root["html_url"]?.jsonPrimitive?.content ?: "https://github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME/releases"

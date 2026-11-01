@@ -7,7 +7,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val appVersion = "1.3.1"
+val appVersion = "1.3.2"
 val appBuild = (project.findProperty("app.build") as? String)?.toIntOrNull() ?: 1
 
 val generateBuildInfo = tasks.register("generateBuildInfo") {

@@ -132,6 +132,11 @@ import com.metrolist.desktop.cast.GoogleCastManager
 import com.metrolist.desktop.cast.WindowsCastHelper
 import com.metrolist.desktop.ui.ConnectDeviceFlyout
 import com.metrolist.desktop.ui.UpdateDialog
+import com.metrolist.desktop.ui.UpdateNavRailButton
+import com.metrolist.desktop.ui.UpdateSimpleDialog
+import com.metrolist.desktop.ui.UpdateToastData
+import com.metrolist.desktop.ui.UpdateToastOverlay
+import com.metrolist.desktop.ui.UpdateToastType
 import com.metrolist.desktop.ui.SongListSkeleton
 import com.metrolist.desktop.updater.DesktopReleaseInfo
 import com.metrolist.desktop.updater.DesktopUpdater
@@ -429,7 +434,13 @@ fun FrameWindowScope.DesktopMainView(
     var songToAddToPlaylist by remember { mutableStateOf<DesktopSong?>(null) }
     var localPlaylistsForDialog by remember { mutableStateOf<List<DesktopPlaylist>>(emptyList()) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
-    var availableUpdate by remember { mutableStateOf<DesktopReleaseInfo?>(null) }
+    val detectedUpdate by DesktopUpdater.detectedUpdate.collectAsState()
+    val isDownloadingUpdate by DesktopUpdater.isDownloadingUpdate.collectAsState()
+    val updateDownloadProgress by DesktopUpdater.updateDownloadProgress.collectAsState()
+    val isUpdateStaged by DesktopUpdater.isUpdateStaged.collectAsState()
+    val stagedReleaseInfo by DesktopUpdater.stagedReleaseInfo.collectAsState()
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var updateToast by remember { mutableStateOf<UpdateToastData?>(null) }
     var isCheckingForUpdate by remember { mutableStateOf(false) }
     var showConnectFlyout by remember { mutableStateOf(false) }
     val selectedDeviceId by DeviceDiscoveryService.selectedDeviceId.collectAsState()
@@ -441,16 +452,8 @@ fun FrameWindowScope.DesktopMainView(
             val update = result.getOrNull()
             if (update != null) {
                 if (update.tagName != UpdaterPreferences.dismissedTag) {
-                    availableUpdate = update
-                    // Unduh otomatis di latar belakang
-                    DesktopUpdater.downloadAndStageUpdate(update)
-                    if (DesktopUpdater.isUpdateStaged.value && UpdaterPreferences.notifications) {
-                        DesktopUpdater.showDesktopNotification(
-                            title = "Pembaruan Siap Dipasang!",
-                            message = "Versi ${update.versionName} siap dipasang. Klik untuk me-restart Echo.",
-                            onNotificationClick = { DesktopUpdater.applyUpdateAndRestart() }
-                        )
-                    }
+                    DesktopUpdater.setDetectedUpdate(update)
+                    // Tidak langsung mengunduh; titik merah akan tampil di icon update pojok kiri bawah
                 }
             }
         } catch (_: Throwable) {
@@ -520,10 +523,47 @@ fun FrameWindowScope.DesktopMainView(
         )
     }
 
-    if (availableUpdate != null) {
-        UpdateDialog(
-            releaseInfo = availableUpdate!!,
-            onDismissRequest = { availableUpdate = null }
+    val activeUpdateInfo = stagedReleaseInfo ?: detectedUpdate
+    if (showUpdateDialog && activeUpdateInfo != null) {
+        UpdateSimpleDialog(
+            releaseInfo = activeUpdateInfo,
+            isStaged = isUpdateStaged,
+            onDismissRequest = { showUpdateDialog = false },
+            onSkipVersion = {
+                DesktopUpdater.dismissDetectedUpdate()
+                showUpdateDialog = false
+            },
+            onUpdateClick = {
+                showUpdateDialog = false
+                val targetUpdate = detectedUpdate ?: activeUpdateInfo
+                val cleanVer = DesktopUpdater.cleanVersion(targetUpdate.versionName)
+                updateToast = UpdateToastData(
+                    title = "Mengunduh pembaruan v$cleanVer...",
+                    message = "Progres dapat dipantau pada icon update di pojok kiri bawah.",
+                    type = UpdateToastType.DOWNLOADING,
+                )
+                scope.launch {
+                    val result = DesktopUpdater.downloadAndStageUpdate(targetUpdate)
+                    result.onSuccess {
+                        updateToast = UpdateToastData(
+                            title = "Pembaruan Siap Dipasang!",
+                            message = "Klik icon update di pojok kiri bawah untuk me-restart Echo.",
+                            type = UpdateToastType.READY,
+                            durationMs = 6000L,
+                        )
+                    }.onFailure { err ->
+                        updateToast = UpdateToastData(
+                            title = "Gagal Mengunduh Pembaruan",
+                            message = err.localizedMessage ?: "Terjadi kesalahan koneksi.",
+                            type = UpdateToastType.INFO,
+                        )
+                    }
+                }
+            },
+            onRestartClick = {
+                showUpdateDialog = false
+                DesktopUpdater.applyUpdateAndRestart()
+            }
         )
     }
 
@@ -686,6 +726,51 @@ fun FrameWindowScope.DesktopMainView(
                             ),
                             modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
                         )
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        UpdateNavRailButton(
+                            detectedUpdate = detectedUpdate,
+                            isDownloading = isDownloadingUpdate,
+                            downloadProgress = updateDownloadProgress,
+                            isStaged = isUpdateStaged,
+                            isChecking = isCheckingForUpdate,
+                            currentVersion = DesktopUpdater.cleanVersion(DesktopUpdater.CURRENT_VERSION),
+                            onClick = {
+                                if (isUpdateStaged || detectedUpdate != null) {
+                                    showUpdateDialog = true
+                                } else if (!isCheckingForUpdate) {
+                                    scope.launch {
+                                        DesktopUpdater.setCheckingUpdate(true)
+                                        try {
+                                            val result = DesktopUpdater.checkForUpdate(forceRefresh = true)
+                                            val update = result.getOrNull()
+                                            if (update != null) {
+                                                DesktopUpdater.setDetectedUpdate(update)
+                                                showUpdateDialog = true
+                                            } else if (result.isSuccess) {
+                                                val currentVer = DesktopUpdater.cleanVersion(DesktopUpdater.CURRENT_VERSION)
+                                                updateToast = UpdateToastData(
+                                                    title = "Echo Sudah Versi Terbaru",
+                                                    message = "v$currentVer adalah versi terkini.",
+                                                    type = UpdateToastType.INFO,
+                                                )
+                                            } else {
+                                                updateToast = UpdateToastData(
+                                                    title = "Pemeriksaan Gagal",
+                                                    message = result.exceptionOrNull()?.message ?: "Koneksi bermasalah.",
+                                                    type = UpdateToastType.INFO,
+                                                )
+                                            }
+                                        } finally {
+                                            DesktopUpdater.setCheckingUpdate(false)
+                                        }
+                                    }
+                                }
+                            },
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
                     }
 
                     // Konten Utama Tengah (Rounded Container Card - Linear 12px & Hairline Border)
@@ -744,9 +829,10 @@ fun FrameWindowScope.DesktopMainView(
                                                 val result = DesktopUpdater.checkForUpdate(forceRefresh = true)
                                                 val update = result.getOrNull()
                                                 if (update != null) {
-                                                    availableUpdate = update
+                                                    DesktopUpdater.setDetectedUpdate(update)
+                                                    showUpdateDialog = true
                                                 } else if (result.isSuccess) {
-                                                    toastMessage = "Echo sudah versi terbaru (${DesktopUpdater.CURRENT_VERSION})"
+                                                    toastMessage = "Echo sudah versi terbaru (${DesktopUpdater.cleanVersion(DesktopUpdater.CURRENT_VERSION)})"
                                                 } else {
                                                     toastMessage = "Gagal memeriksa pembaruan: ${result.exceptionOrNull()?.message ?: "Koneksi bermasalah"}"
                                                 }
@@ -848,6 +934,12 @@ fun FrameWindowScope.DesktopMainView(
                     )
                 }
             }
+
+            // Bottom-Right Corner Non-Intrusive Update Toast Notification
+            UpdateToastOverlay(
+                toast = updateToast,
+                onDismiss = { updateToast = null },
+            )
         }
     }
 }
@@ -2040,7 +2132,7 @@ fun SettingsView(
                         Text("Tentang Echo", fontWeight = FontWeight.Medium, color = DesktopColors.Paper, fontSize = 16.sp)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "Versi ${DesktopUpdater.CURRENT_VERSION}",
+                            "Versi ${DesktopUpdater.cleanVersion(DesktopUpdater.CURRENT_VERSION)}",
                             color = DesktopColors.Fog,
                             fontSize = 12.5.sp,
                         )
