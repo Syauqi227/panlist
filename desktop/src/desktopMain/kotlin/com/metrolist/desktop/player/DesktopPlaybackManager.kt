@@ -27,6 +27,7 @@ class DesktopPlaybackManager(
     val lastPlaybackStore: LastPlaybackStore = LastPlaybackStore(),
 ) {
     private var hasLoadedMediaInSession: Boolean = false
+    private var pendingInitialSeekMs: Long? = null
     private val _queue = MutableStateFlow<List<DesktopSong>>(emptyList())
     val queue: StateFlow<List<DesktopSong>> = _queue.asStateFlow()
 
@@ -106,6 +107,15 @@ class DesktopPlaybackManager(
                 _currentIndex.value = restored.currentIndex.coerceIn(0, q.size - 1)
                 _currentPlaylistTitle.value = restored.playlistTitle
                 hasLoadedMediaInSession = false
+                if (restored.lastPositionMs > 1000L) {
+                    pendingInitialSeekMs = restored.lastPositionMs
+                }
+                player.setMetadata(
+                    title = restored.currentSong.title,
+                    artist = restored.currentSong.artist,
+                    thumbnailUrl = restored.currentSong.thumbnailUrl,
+                    initialPositionMs = restored.lastPositionMs,
+                )
             }
         }
     }
@@ -406,6 +416,14 @@ class DesktopPlaybackManager(
                     artist = song.artist,
                     thumbnailUrl = song.thumbnailUrl,
                 )
+                val initialSeek = pendingInitialSeekMs
+                pendingInitialSeekMs = null
+                if (initialSeek != null && initialSeek > 1000L) {
+                    scope.launch {
+                        delay(600)
+                        player.seekTo(initialSeek)
+                    }
+                }
                 player.setMute(isCast)
             } else if (!isCast) {
                 _statusMessage.value = "Koneksi terputus dan lagu '${song.title}' belum diunduh untuk offline."

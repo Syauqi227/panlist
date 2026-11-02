@@ -53,10 +53,10 @@ jobs:
               $buildNumber = if ($tag -match "-b(\d+)$") { $matches[1] } else { "1" }
           } elseif ($inputBuild -ne "") {
               $buildNumber = $inputBuild
-              $tagName = "v1.3.2"
+              $tagName = "v1.3.4"
           } else {
               $buildNumber = "1"
-              $tagName = "v1.3.2"
+              $tagName = "v1.3.4"
           }
 
           Write-Host "Build Number: $buildNumber"

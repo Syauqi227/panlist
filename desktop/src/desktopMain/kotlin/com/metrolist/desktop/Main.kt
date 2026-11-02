@@ -142,6 +142,7 @@ import com.metrolist.desktop.updater.DesktopReleaseInfo
 import com.metrolist.desktop.updater.DesktopUpdater
 import com.metrolist.desktop.updater.UpdaterPreferences
 import com.metrolist.desktop.discord.DesktopDiscordRpc
+import com.metrolist.desktop.memory.DesktopMemoryManager
 import com.jetbrains.JBR
 import com.jetbrains.WindowDecorations
 import kotlinx.coroutines.delay
@@ -306,9 +307,7 @@ fun main() {
             },
         ) {
             LaunchedEffect(windowState.isMinimized) {
-                if (windowState.isMinimized) {
-                    System.gc()
-                }
+                DesktopMemoryManager.onWindowStateChanged(windowState.isMinimized)
             }
             var customTitleBar by remember { mutableStateOf<WindowDecorations.CustomTitleBar?>(null) }
             val themeBgAwtColor = remember { java.awt.Color(0x08, 0x09, 0x0A) }
@@ -328,6 +327,16 @@ fun main() {
                 }
                 window.addComponentListener(compListener)
 
+                val focusListener = object : java.awt.event.WindowFocusListener {
+                    override fun windowGainedFocus(e: java.awt.event.WindowEvent?) {
+                        DesktopMemoryManager.onWindowFocusChanged(isFocused = true)
+                    }
+                    override fun windowLostFocus(e: java.awt.event.WindowEvent?) {
+                        DesktopMemoryManager.onWindowFocusChanged(isFocused = false)
+                    }
+                }
+                window.addWindowFocusListener(focusListener)
+
 
                 if (isJbrSupported) {
                     try {
@@ -345,6 +354,7 @@ fun main() {
                     }
                 }
                 onDispose {
+                    window.removeWindowFocusListener(focusListener)
                     window.removeComponentListener(compListener)
                     if (isJbrSupported) {
                         try {
@@ -2427,6 +2437,19 @@ private fun PlayerSeekBarRow(
 ) {
     val currentPosition by player.currentPosition.collectAsState()
     val duration by player.duration.collectAsState()
+    val currentSong by playbackManager.currentSong.collectAsState()
+
+    val totalDurationMs = if (duration > 0L) {
+        duration
+    } else {
+        parseDurationTextToMs(currentSong?.durationText)
+    }
+
+    val displayDurationText = if (duration > 0L) {
+        formatTime(duration)
+    } else {
+        currentSong?.durationText?.ifBlank { "0:00" } ?: "0:00"
+    }
 
     Row(
         modifier = modifier.height(16.dp),
@@ -2443,8 +2466,12 @@ private fun PlayerSeekBarRow(
         )
         Spacer(modifier = Modifier.width(8.dp))
         SpotifyStyleProgressBar(
-            value = if (duration > 0) currentPosition.toFloat() / duration else 0f,
-            onValueChange = { fraction -> playbackManager.seekTo((fraction * duration).toLong()) },
+            value = if (totalDurationMs > 0) (currentPosition.toFloat() / totalDurationMs).coerceIn(0f, 1f) else 0f,
+            onValueChange = { fraction ->
+                if (totalDurationMs > 0) {
+                    playbackManager.seekTo((fraction * totalDurationMs).toLong())
+                }
+            },
             modifier = Modifier.weight(1f),
             activeColor = DesktopColors.Paper,
             inactiveColor = DesktopColors.Slate,
@@ -2454,7 +2481,7 @@ private fun PlayerSeekBarRow(
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = formatTime(duration),
+            text = displayDurationText,
             fontSize = 11.sp,
             lineHeight = 11.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -2592,6 +2619,9 @@ fun BottomPlayerBar(
     val currentIndex by playbackManager.currentIndex.collectAsState()
     val currentPlaylistTitle by playbackManager.currentPlaylistTitle.collectAsState()
     val currentSong by playbackManager.currentSong.collectAsState()
+    val displayTitle = (currentSong?.title ?: currentTitle).ifBlank { "Echo" }
+    val displayArtist = (currentSong?.artist ?: currentArtist).ifBlank { "YouTube Music" }
+    val displayThumbnailUrl = currentSong?.thumbnailUrl ?: currentThumbnailUrl
 
     Box(
         modifier = modifier
@@ -2645,10 +2675,10 @@ fun BottomPlayerBar(
                                 .clip(DesktopRadii.Button)
                                 .clickable(enabled = currentSong != null) { onToggleNowPlaying() }
                         ) {
-                            if (!currentThumbnailUrl.isNullOrBlank()) {
+                            if (!displayThumbnailUrl.isNullOrBlank()) {
                                 AsyncImage(
-                                    model = currentThumbnailUrl,
-                                    contentDescription = currentTitle,
+                                    model = displayThumbnailUrl,
+                                    contentDescription = displayTitle,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize().clip(DesktopRadii.Button),
                                 )
@@ -2699,7 +2729,7 @@ fun BottomPlayerBar(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            text = currentTitle.ifBlank { "Echo" },
+                            text = displayTitle,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = if (isNowPlayingOpen) DesktopColors.AcidLime else DesktopColors.Paper,
@@ -2708,7 +2738,7 @@ fun BottomPlayerBar(
                         )
                         Spacer(modifier = Modifier.height(1.dp))
                         Text(
-                            text = currentArtist.ifBlank { "YouTube Music" },
+                            text = displayArtist,
                             fontSize = 11.sp,
                             color = DesktopColors.Fog,
                             maxLines = 1,
@@ -3029,6 +3059,16 @@ fun BottomPlayerBar(
             }
         }
         }
+    }
+}
+
+private fun parseDurationTextToMs(text: String?): Long {
+    if (text.isNullOrBlank()) return 0L
+    val parts = text.trim().split(":").mapNotNull { it.toIntOrNull() }
+    return when (parts.size) {
+        2 -> (parts[0] * 60L + parts[1]) * 1000L
+        3 -> (parts[0] * 3600L + parts[1] * 60L + parts[2]) * 1000L
+        else -> 0L
     }
 }
 

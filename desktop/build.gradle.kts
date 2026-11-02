@@ -7,7 +7,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val appVersion = "1.3.3"
+val appVersion = "1.3.4"
 val appBuild = (project.findProperty("app.build") as? String)?.toIntOrNull() ?: 1
 
 val generateBuildInfo = tasks.register("generateBuildInfo") {
@@ -93,6 +93,9 @@ compose.desktop {
             "-XX:+UseG1GC",
             "-XX:+UnlockExperimentalVMOptions",
             "-XX:G1PeriodicGCInterval=3000",
+            "-XX:G1PeriodicGCSysCompaction=true",
+            "-XX:MinHeapFreeRatio=10",
+            "-XX:MaxHeapFreeRatio=30",
             "-XX:MaxMetaspaceSize=128m"
         )
 

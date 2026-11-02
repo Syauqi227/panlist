@@ -115,6 +115,13 @@ class VlcAudioPlayer(
         }
     }
 
+    fun setMetadata(title: String, artist: String, thumbnailUrl: String? = null, initialPositionMs: Long = 0L) {
+        _currentTitle.value = title
+        _currentArtist.value = artist
+        _currentThumbnailUrl.value = thumbnailUrl
+        _currentPosition.value = initialPositionMs
+    }
+
     fun play(url: String, title: String, artist: String, thumbnailUrl: String? = null) {
         _currentTitle.value = title
         _currentArtist.value = artist
