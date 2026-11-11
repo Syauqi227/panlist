@@ -1,18 +1,23 @@
 package com.metrolist.desktop.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import com.metrolist.desktop.model.resize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URI
 import javax.imageio.ImageIO
 import kotlin.math.absoluteValue
 
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
-
 object NowPlayingColorExtractor {
     private val colorCache = mutableMapOf<String, Color>()
-    private val bitmapCache = mutableMapOf<String, ImageBitmap>()
+
+    // Hanya menyimpan 1 lagu aktif di memori (~1 MB), lagu lama langsung dibebaskan
+    @Volatile
+    private var activeSongId: String? = null
+    @Volatile
+    private var activeBitmap: ImageBitmap? = null
 
     val defaultPalettes = listOf(
         Color(0xFF0A4B52), // Deep Teal / Cyan (exact shade in Spotify screenshot)
@@ -32,7 +37,7 @@ object NowPlayingColorExtractor {
     }
 
     fun getCachedBitmap(songId: String): ImageBitmap? {
-        return bitmapCache[songId]
+        return if (songId == activeSongId) activeBitmap else null
     }
 
     suspend fun extractOrSampleColor(songId: String, thumbnailUrl: String?): Color {
@@ -44,8 +49,10 @@ object NowPlayingColorExtractor {
         }
 
         try {
+            // Gunakan ukuran 500x500 agar efisien dalam decoding namun tetap tajam untuk NowPlaying cover
+            val targetUrl = thumbnailUrl.resize(500, 500)
             val image = withContext(Dispatchers.IO) {
-                val url = URI(thumbnailUrl).toURL()
+                val url = URI(targetUrl).toURL()
                 val connection = url.openConnection()
                 connection.connectTimeout = 2500
                 connection.readTimeout = 2500
@@ -56,9 +63,10 @@ object NowPlayingColorExtractor {
             }
 
             if (image != null) {
-                // Cache ImageBitmap
+                // Simpan hanya untuk lagu aktif saat ini (lagu lama otomatis dibuang dari RAM)
                 val composeBitmap = image.toComposeImageBitmap()
-                bitmapCache[songId] = composeBitmap
+                activeSongId = songId
+                activeBitmap = composeBitmap
 
                 // Process heavy pixel analysis on Dispatchers.Default
                 val sampledColor = withContext(Dispatchers.Default) {
