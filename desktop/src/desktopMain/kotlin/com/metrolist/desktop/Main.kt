@@ -3,6 +3,11 @@ package com.metrolist.desktop
 import androidx.compose.ui.focus.onFocusChanged
 import com.metrolist.desktop.ui.SearchDropdownMenu
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationVector1D
@@ -117,7 +122,8 @@ import com.metrolist.desktop.player.RepeatMode
 import com.metrolist.desktop.player.VlcAudioPlayer
 import com.metrolist.desktop.repository.DesktopMusicRepository
 import com.metrolist.desktop.smtc.WindowsMediaControls
-import com.metrolist.desktop.ui.AddToPlaylistDialog
+import com.metrolist.desktop.ui.AddSongDirectlyPanel
+import com.metrolist.desktop.ui.AddToPlaylistPanel
 import com.metrolist.desktop.ui.DesktopColors
 import com.metrolist.desktop.ui.DesktopColorScheme
 import com.metrolist.desktop.ui.DesktopRadii
@@ -145,6 +151,8 @@ import com.metrolist.desktop.discord.DesktopDiscordRpc
 import com.metrolist.desktop.memory.DesktopMemoryManager
 import com.jetbrains.JBR
 import com.jetbrains.WindowDecorations
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.system.exitProcess
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -265,22 +273,36 @@ fun main() {
             )
         }
 
-        val onClose = {
-            GoogleCastManager.disconnect(sendStop = true)
-            discordRpc.close()
-            player.release()
+        val isClosing = remember { AtomicBoolean(false) }
+        val performShutdownCleanup = {
+            if (isClosing.compareAndSet(false, true)) {
+                try { playbackManager.savePlaybackPositionBlocking(250L) } catch (_: Throwable) {}
+                try { discordRpc.close() } catch (_: Throwable) {}
+                try { GoogleCastManager.disconnect(sendStop = true) } catch (_: Throwable) {}
+                try { player.releaseBlocking(500L) } catch (_: Throwable) {}
+            }
+        }
+
+        val onClose: () -> Unit = {
+            performShutdownCleanup()
             exitApplication()
+            Thread {
+                try { Thread.sleep(350) } catch (_: Throwable) {}
+                exitProcess(0)
+            }.apply {
+                isDaemon = true
+                name = "Echo-Shutdown-Watchdog"
+                start()
+            }
         }
 
         DisposableEffect(Unit) {
             val shutdownHook = Thread {
-                try {
-                    GoogleCastManager.disconnect(sendStop = true)
-                    player.release()
-                } catch (_: Throwable) {}
+                performShutdownCleanup()
             }
             Runtime.getRuntime().addShutdownHook(shutdownHook)
             onDispose {
+                performShutdownCleanup()
                 try {
                     Runtime.getRuntime().removeShutdownHook(shutdownHook)
                 } catch (_: Throwable) {}
@@ -404,6 +426,13 @@ fun main() {
         }
     }
 }
+exitProcess(0)
+}
+
+private sealed interface LeftSidePanel {
+    data class AddToPlaylist(val song: DesktopSong) : LeftSidePanel
+    data class AddSongToPlaylist(val playlist: DesktopPlaylist) : LeftSidePanel
+    data object ConnectDevice : LeftSidePanel
 }
 
 private data class NavState(
@@ -439,10 +468,14 @@ fun FrameWindowScope.DesktopMainView(
     val scope = rememberCoroutineScope()
 
     val isResolving by playbackManager.isResolving.collectAsState()
+    val isWaitingForNetwork by playbackManager.isWaitingForNetwork.collectAsState()
     val statusMessage by playbackManager.statusMessage.collectAsState()
 
-    var songToAddToPlaylist by remember { mutableStateOf<DesktopSong?>(null) }
-    var localPlaylistsForDialog by remember { mutableStateOf<List<DesktopPlaylist>>(emptyList()) }
+    var activeLeftPanel by remember { mutableStateOf<LeftSidePanel?>(null) }
+    var renderedLeftPanel by remember { mutableStateOf<LeftSidePanel?>(null) }
+    var localPlaylistsForPanel by remember { mutableStateOf<List<DesktopPlaylist>>(emptyList()) }
+    var addToPlaylistFeedback by remember { mutableStateOf<String?>(null) }
+    var playlistRefreshTick by remember { mutableIntStateOf(0) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
     val detectedUpdate by DesktopUpdater.detectedUpdate.collectAsState()
     val isDownloadingUpdate by DesktopUpdater.isDownloadingUpdate.collectAsState()
@@ -452,8 +485,37 @@ fun FrameWindowScope.DesktopMainView(
     var showUpdateDialog by remember { mutableStateOf(false) }
     var updateToast by remember { mutableStateOf<UpdateToastData?>(null) }
     var isCheckingForUpdate by remember { mutableStateOf(false) }
-    var showConnectFlyout by remember { mutableStateOf(false) }
     val selectedDeviceId by DeviceDiscoveryService.selectedDeviceId.collectAsState()
+
+    if (activeLeftPanel != null) {
+        renderedLeftPanel = activeLeftPanel
+    }
+
+    fun openAddToPlaylistPanel(song: DesktopSong) {
+        if (playerProgress.value > 0.05f) {
+            scope.launch { playerProgress.animateTo(0f, springSpec) }
+        }
+        addToPlaylistFeedback = null
+        activeLeftPanel = LeftSidePanel.AddToPlaylist(song)
+    }
+
+    fun openAddSongToPlaylistPanel(playlist: DesktopPlaylist) {
+        if (playerProgress.value > 0.05f) {
+            scope.launch { playerProgress.animateTo(0f, springSpec) }
+        }
+        activeLeftPanel = LeftSidePanel.AddSongToPlaylist(playlist)
+    }
+
+    fun openConnectPanel(toggleIfOpen: Boolean = false) {
+        if (toggleIfOpen && activeLeftPanel is LeftSidePanel.ConnectDevice) {
+            activeLeftPanel = null
+        } else {
+            if (playerProgress.value > 0.05f) {
+                scope.launch { playerProgress.animateTo(0f, springSpec) }
+            }
+            activeLeftPanel = LeftSidePanel.ConnectDevice
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (!UpdaterPreferences.autoCheck) return@LaunchedEffect
@@ -496,9 +558,16 @@ fun FrameWindowScope.DesktopMainView(
         }
     }
 
-    LaunchedEffect(songToAddToPlaylist) {
-        if (songToAddToPlaylist != null) {
-            localPlaylistsForDialog = repository.getLocalPlaylists()
+    LaunchedEffect(activeLeftPanel, playlistRefreshTick) {
+        if (activeLeftPanel is LeftSidePanel.AddToPlaylist) {
+            localPlaylistsForPanel = repository.getLocalPlaylists()
+        }
+    }
+
+    LaunchedEffect(addToPlaylistFeedback) {
+        if (addToPlaylistFeedback != null) {
+            delay(3000)
+            addToPlaylistFeedback = null
         }
     }
 
@@ -507,30 +576,6 @@ fun FrameWindowScope.DesktopMainView(
             delay(3500)
             toastMessage = null
         }
-    }
-
-    if (songToAddToPlaylist != null) {
-        AddToPlaylistDialog(
-            song = songToAddToPlaylist!!,
-            playlists = localPlaylistsForDialog,
-            onDismissRequest = { songToAddToPlaylist = null },
-            onSelectPlaylist = { pl ->
-                scope.launch {
-                    repository.addSongToLocalPlaylist(pl.id, songToAddToPlaylist!!)
-                    localPlaylistsForDialog = repository.getLocalPlaylists()
-                    toastMessage = "Lagu ditambahkan ke '${pl.title}'"
-                    songToAddToPlaylist = null
-                }
-            },
-            onCreateNewPlaylistAndAdd = { title ->
-                scope.launch {
-                    repository.createLocalPlaylist(title, initialSongs = listOf(songToAddToPlaylist!!))
-                    localPlaylistsForDialog = repository.getLocalPlaylists()
-                    toastMessage = "Playlist '$title' dibuat dan lagu ditambahkan!"
-                    songToAddToPlaylist = null
-                }
-            }
-        )
     }
 
     val activeUpdateInfo = stagedReleaseInfo ?: detectedUpdate
@@ -582,9 +627,9 @@ fun FrameWindowScope.DesktopMainView(
             .fillMaxSize()
             .background(DesktopColors.Background)
             .onPreviewKeyEvent {
-                if (it.key == Key.Escape) {
-                    if (showConnectFlyout) {
-                        showConnectFlyout = false
+                if (it.key == Key.Escape && it.type == KeyEventType.KeyDown) {
+                    if (activeLeftPanel is LeftSidePanel.ConnectDevice || activeLeftPanel is LeftSidePanel.AddSongToPlaylist) {
+                        activeLeftPanel = null
                         true
                     } else if (playerProgress.value > 0.05f) {
                         scope.launch { playerProgress.animateTo(0f, springSpec) }
@@ -598,6 +643,7 @@ fun FrameWindowScope.DesktopMainView(
     ) {
         val isCompactRail by remember { derivedStateOf { maxWidth < 900.dp } }
         val railWidth = if (isCompactRail) 72.dp else 84.dp
+        val sidePanelWidth = (maxWidth * 0.30f).coerceIn(290.dp, 350.dp)
 
         Box(modifier = Modifier.fillMaxSize()) {
             Column(
@@ -647,7 +693,7 @@ fun FrameWindowScope.DesktopMainView(
                         }
                     },
                     onAddToPlaylist = { song ->
-                        songToAddToPlaylist = song
+                        openAddToPlaylistPanel(song)
                     },
                     currentSong = currentSong,
                     isPlaying = isPlaying,
@@ -665,7 +711,6 @@ fun FrameWindowScope.DesktopMainView(
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(start = 8.dp, end = 8.dp, bottom = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     NavigationRail(
                         containerColor = DesktopColors.Carbon,
@@ -783,6 +828,80 @@ fun FrameWindowScope.DesktopMainView(
                         Spacer(modifier = Modifier.height(14.dp))
                     }
 
+                    // Panel Samping Kiri (Non-Modal, memotong area konten utama di sebelah NavigationRail)
+                    AnimatedVisibility(
+                        visible = activeLeftPanel != null,
+                        enter = expandHorizontally(
+                            expandFrom = Alignment.Start,
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        ) + fadeIn(animationSpec = tween(durationMillis = 180, easing = LinearOutSlowInEasing)),
+                        exit = shrinkHorizontally(
+                            shrinkTowards = Alignment.Start,
+                            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                        ) + fadeOut(animationSpec = tween(durationMillis = 130, easing = FastOutLinearInEasing)),
+                    ) {
+                        Box(modifier = Modifier.padding(start = 8.dp).fillMaxHeight()) {
+                        when (val panel = renderedLeftPanel) {
+                            is LeftSidePanel.AddToPlaylist -> {
+                                AddToPlaylistPanel(
+                                    song = panel.song,
+                                    playlists = localPlaylistsForPanel,
+                                    feedbackMessage = addToPlaylistFeedback,
+                                    onClose = { activeLeftPanel = null },
+                                    onSelectPlaylist = { pl ->
+                                        scope.launch {
+                                            val alreadyExists = pl.songs.any { it.id == panel.song.id }
+                                            if (alreadyExists) {
+                                                addToPlaylistFeedback = "Sudah ada di '${pl.title}'"
+                                                toastMessage = "Lagu sudah ada di '${pl.title}'"
+                                            } else {
+                                                repository.addSongToLocalPlaylist(pl.id, panel.song)
+                                                localPlaylistsForPanel = repository.getLocalPlaylists()
+                                                playlistRefreshTick++
+                                                addToPlaylistFeedback = "Ditambahkan ke '${pl.title}'"
+                                                toastMessage = "Lagu ditambahkan ke '${pl.title}'"
+                                            }
+                                            // Panel Tambah ke Playlist tetap terbuka sampai user menekan X
+                                        }
+                                    },
+                                    onCreateNewPlaylistAndAdd = { title ->
+                                        scope.launch {
+                                            repository.createLocalPlaylist(title, initialSongs = listOf(panel.song))
+                                            localPlaylistsForPanel = repository.getLocalPlaylists()
+                                            playlistRefreshTick++
+                                            addToPlaylistFeedback = "Playlist '$title' dibuat & lagu ditambahkan"
+                                            toastMessage = "Playlist '$title' dibuat dan lagu ditambahkan!"
+                                            // Panel Tambah ke Playlist tetap terbuka sampai user menekan X
+                                        }
+                                    },
+                                    modifier = Modifier.width(sidePanelWidth),
+                                )
+                            }
+                            is LeftSidePanel.AddSongToPlaylist -> {
+                                AddSongDirectlyPanel(
+                                    playlist = panel.playlist,
+                                    repository = repository,
+                                    refreshTick = playlistRefreshTick,
+                                    onClose = { activeLeftPanel = null },
+                                    onSongAdded = {
+                                        playlistRefreshTick++
+                                    },
+                                    modifier = Modifier.width(sidePanelWidth),
+                                )
+                            }
+                            is LeftSidePanel.ConnectDevice -> {
+                                ConnectDeviceFlyout(
+                                    onClose = { activeLeftPanel = null },
+                                    modifier = Modifier.width(sidePanelWidth),
+                                )
+                            }
+                            null -> Unit
+                        }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
                     // Konten Utama Tengah (Rounded Container Card - Linear 12px & Hairline Border)
                     Box(
                         modifier = Modifier
@@ -792,75 +911,97 @@ fun FrameWindowScope.DesktopMainView(
                             .border(BorderStroke(1.dp, DesktopColors.Border), DesktopRadii.Card)
                             .background(DesktopColors.Carbon)
                     ) {
-                        if (nav.isLyrics && currentSong != null) {
-                            DesktopLyricsPageView(
-                                song = currentSong!!,
-                                player = player,
+                        when (nav.tab) {
+                            0 -> HomeView(
                                 repository = repository,
                                 playbackManager = playbackManager,
-                                onClose = { navigateTo(nav.copy(isLyrics = false)) },
-                                onAddToPlaylist = { songToAddToPlaylist = it }
+                                activeSearchQuery = activeSearchQuery,
+                                onClearSearch = {
+                                    searchQuery = ""
+                                    activeSearchQuery = ""
+                                },
+                                onSongSelected = { song, list -> playbackManager.playSong(song, list) },
+                                onAddToPlaylist = { openAddToPlaylistPanel(it) }
                             )
-                        } else {
-                            when (nav.tab) {
-                                0 -> HomeView(
-                                    repository = repository,
-                                    playbackManager = playbackManager,
-                                    activeSearchQuery = activeSearchQuery,
-                                    onClearSearch = {
-                                        searchQuery = ""
-                                        activeSearchQuery = ""
-                                    },
-                                    onSongSelected = { song, list -> playbackManager.playSong(song, list) },
-                                    onAddToPlaylist = { songToAddToPlaylist = it }
-                                )
-                                1 -> PlaylistView(
-                                    repository = repository,
-                                    playbackManager = playbackManager,
-                                    activePlaylistId = nav.playlistId,
-                                    onOpenPlaylist = { playlistId ->
-                                        navigateTo(NavState(tab = 1, playlistId = playlistId))
-                                    },
-                                    onBack = { goBack() },
-                                    onAddToPlaylistRequest = { songToAddToPlaylist = it }
-                                )
-                                2 -> SettingsView(
-                                    player = player,
-                                    discordRpc = discordRpc,
-                                    onToggleDiscordRpc = { enabled ->
-                                        repository.setDiscordRpcEnabled(enabled)
-                                    },
-                                    isCheckingForUpdate = isCheckingForUpdate,
-                                    onCheckForUpdate = {
-                                        scope.launch {
-                                            if (isCheckingForUpdate) return@launch
-                                            isCheckingForUpdate = true
-                                            try {
-                                                val result = DesktopUpdater.checkForUpdate(forceRefresh = true)
-                                                val update = result.getOrNull()
-                                                if (update != null) {
-                                                    DesktopUpdater.setDetectedUpdate(update)
-                                                    showUpdateDialog = true
-                                                } else if (result.isSuccess) {
-                                                    toastMessage = "Echo sudah versi terbaru (${DesktopUpdater.cleanVersion(DesktopUpdater.CURRENT_VERSION)})"
-                                                } else {
-                                                    toastMessage = "Gagal memeriksa pembaruan: ${result.exceptionOrNull()?.message ?: "Koneksi bermasalah"}"
-                                                }
-                                            } catch (e: Throwable) {
-                                                toastMessage = "Gagal memeriksa pembaruan: ${e.message}"
-                                            } finally {
-                                                isCheckingForUpdate = false
+                            1 -> PlaylistView(
+                                repository = repository,
+                                playbackManager = playbackManager,
+                                activePlaylistId = nav.playlistId,
+                                playlistRefreshTick = playlistRefreshTick,
+                                onOpenPlaylist = { playlistId ->
+                                    navigateTo(NavState(tab = 1, playlistId = playlistId))
+                                },
+                                onBack = { goBack() },
+                                onAddToPlaylistRequest = { openAddToPlaylistPanel(it) },
+                                onAddSongDirectlyRequest = { openAddSongToPlaylistPanel(it) },
+                                onPlaylistMutated = { playlistRefreshTick++ },
+                                onPlaylistDeletedNotify = { deletedId ->
+                                    val currentPanel = activeLeftPanel
+                                    if (currentPanel is LeftSidePanel.AddSongToPlaylist && currentPanel.playlist.id == deletedId) {
+                                        activeLeftPanel = null
+                                    }
+                                }
+                            )
+                            2 -> SettingsView(
+                                player = player,
+                                discordRpc = discordRpc,
+                                onToggleDiscordRpc = { enabled ->
+                                    repository.setDiscordRpcEnabled(enabled)
+                                },
+                                isCheckingForUpdate = isCheckingForUpdate,
+                                onCheckForUpdate = {
+                                    scope.launch {
+                                        if (isCheckingForUpdate) return@launch
+                                        isCheckingForUpdate = true
+                                        try {
+                                            val result = DesktopUpdater.checkForUpdate(forceRefresh = true)
+                                            val update = result.getOrNull()
+                                            if (update != null) {
+                                                DesktopUpdater.setDetectedUpdate(update)
+                                                showUpdateDialog = true
+                                            } else if (result.isSuccess) {
+                                                toastMessage = "Echo sudah versi terbaru (${DesktopUpdater.cleanVersion(DesktopUpdater.CURRENT_VERSION)})"
+                                            } else {
+                                                toastMessage = "Gagal memeriksa pembaruan: ${result.exceptionOrNull()?.message ?: "Koneksi bermasalah"}"
                                             }
+                                        } catch (e: Throwable) {
+                                            toastMessage = "Gagal memeriksa pembaruan: ${e.message}"
+                                        } finally {
+                                            isCheckingForUpdate = false
                                         }
-                                    },
-                                    onOpenConnectFlyout = { showConnectFlyout = true },
+                                    }
+                                },
+                                onOpenConnectFlyout = { openConnectPanel(toggleIfOpen = false) },
+                            )
+                        }
+
+                        // Halaman Lirik dengan animasi fade-in halus saat masuk
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = nav.isLyrics && currentSong != null,
+                            enter = fadeIn(
+                                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)
+                            ),
+                            exit = fadeOut(
+                                animationSpec = tween(durationMillis = 200, easing = FastOutLinearInEasing)
+                            ),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            currentSong?.let { activeSong ->
+                                DesktopLyricsPageView(
+                                    song = activeSong,
+                                    player = player,
+                                    repository = repository,
+                                    playbackManager = playbackManager,
+                                    onClose = { navigateTo(nav.copy(isLyrics = false)) },
+                                    onAddToPlaylist = { openAddToPlaylistPanel(it) },
                                 )
                             }
                         }
 
                         // Status / Toast overlay
                         val activeMessage = toastMessage ?: statusMessage
-                        if (activeMessage != null || isResolving) {
+                        val isBusyNetwork = isResolving || isWaitingForNetwork
+                        if (activeMessage != null || isBusyNetwork) {
                             Card(
                                 colors = CardDefaults.cardColors(containerColor = DesktopColors.CardElevated),
                                 border = BorderStroke(1.dp, DesktopColors.Border),
@@ -873,7 +1014,7 @@ fun FrameWindowScope.DesktopMainView(
                                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    if (isResolving) {
+                                    if (isBusyNetwork) {
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(18.dp),
                                             color = DesktopColors.Primary,
@@ -913,36 +1054,27 @@ fun FrameWindowScope.DesktopMainView(
                     playbackManager = playbackManager,
                     progress = playerProgress,
                     springSpec = springSpec,
+                    isLyricsOpen = nav.isLyrics,
                     onClose = {
                         scope.launch { playerProgress.animateTo(0f, springSpec) }
+                    },
+                    onToggleLyrics = {
+                        if (nav.isLyrics) {
+                            navigateTo(nav.copy(isLyrics = false))
+                        } else {
+                            scope.launch { playerProgress.animateTo(0f, springSpec) }
+                            navigateTo(nav.copy(isLyrics = true))
+                        }
                     },
                     onOpenLyrics = {
                         scope.launch { playerProgress.animateTo(0f, springSpec) }
                         navigateTo(nav.copy(isLyrics = true))
                     },
-                    onAddToPlaylist = { songToAddToPlaylist = it },
-                    isConnectFlyoutOpen = showConnectFlyout,
+                    onAddToPlaylist = { openAddToPlaylistPanel(it) },
+                    isConnectFlyoutOpen = activeLeftPanel is LeftSidePanel.ConnectDevice,
                     selectedDeviceId = selectedDeviceId,
-                    onToggleConnectFlyout = { showConnectFlyout = !showConnectFlyout },
+                    onToggleConnectFlyout = { openConnectPanel(toggleIfOpen = true) },
                 )
-            }
-
-            // In-App Connect Device Flyout (Spotify Style)
-            if (showConnectFlyout) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            showConnectFlyout = false
-                        }
-                ) {
-                    ConnectDeviceFlyout(
-                        onClose = { showConnectFlyout = false },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = 84.dp)
-                    )
-                }
             }
 
             // Bottom-Right Corner Non-Intrusive Update Toast Notification
@@ -1937,6 +2069,7 @@ fun SongListItem(
                         text = song.artist,
                         fontSize = 12.5.sp,
                         color = DesktopColors.Fog,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -2601,6 +2734,7 @@ fun BottomPlayerBar(
     modifier: Modifier = Modifier,
 ) {
     val isPlaying by player.isPlaying.collectAsState()
+    val isBuffering by playbackManager.isBuffering.collectAsState()
     val currentTitle by player.currentTitle.collectAsState()
     val currentArtist by player.currentArtist.collectAsState()
     val currentThumbnailUrl by player.currentThumbnailUrl.collectAsState()
@@ -2698,7 +2832,7 @@ fun BottomPlayerBar(
                                 }
                             }
 
-                            if (isPlaying) {
+                            if (isPlaying && !isBuffering) {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.BottomCenter)
@@ -2824,7 +2958,13 @@ fun BottomPlayerBar(
                         Spacer(modifier = Modifier.width(10.dp))
 
                         // Play / Pause: High-emphasis Acid Lime action
-                        PlayerTooltip(text = if (isPlaying) "Jeda" else "Putar") {
+                        PlayerTooltip(
+                            text = when {
+                                isPlaying -> "Jeda"
+                                isBuffering -> "Menunggu koneksi..."
+                                else -> "Putar"
+                            }
+                        ) {
                             IconButton(
                                 onClick = { playbackManager.togglePlayPause() },
                                 modifier = Modifier
@@ -2833,12 +2973,20 @@ fun BottomPlayerBar(
                                     .background(DesktopColors.AcidLime)
                                     .pointerHoverIcon(PointerIcon.Hand),
                             ) {
-                                Icon(
-                                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlaying) "Jeda" else "Putar",
-                                    tint = DesktopColors.Void,
-                                    modifier = Modifier.size(18.dp),
-                                )
+                                if (isBuffering && !isPlaying) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = DesktopColors.Void,
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Icon(
+                                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isPlaying) "Jeda" else "Putar",
+                                        tint = DesktopColors.Void,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
                             }
                         }
 
@@ -3088,7 +3236,9 @@ fun BoxScope.UnifiedPlayerLayer(
     playbackManager: DesktopPlaybackManager,
     progress: Animatable<Float, androidx.compose.animation.core.AnimationVector1D>,
     springSpec: AnimationSpec<Float>,
+    isLyricsOpen: Boolean = false,
     onClose: () -> Unit,
+    onToggleLyrics: () -> Unit = {},
     onOpenLyrics: () -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
     isConnectFlyoutOpen: Boolean = false,
@@ -3179,13 +3329,13 @@ fun BoxScope.UnifiedPlayerLayer(
                     player = player,
                     playbackManager = playbackManager,
                     isNowPlayingOpen = false,
-                    isLyricsOpen = false,
+                    isLyricsOpen = isLyricsOpen,
                     isConnectFlyoutOpen = isConnectFlyoutOpen,
                     selectedDeviceId = selectedDeviceId,
                     onToggleNowPlaying = {
                         scope.launch { progress.animateTo(1f, springSpec) }
                     },
-                    onToggleLyrics = onOpenLyrics,
+                    onToggleLyrics = onToggleLyrics,
                     onAddToPlaylist = onAddToPlaylist,
                     onToggleConnectFlyout = onToggleConnectFlyout,
                     modifier = Modifier

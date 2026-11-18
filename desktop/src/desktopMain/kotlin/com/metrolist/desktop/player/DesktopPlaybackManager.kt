@@ -5,14 +5,21 @@ import com.metrolist.desktop.model.DesktopPlaylist
 import com.metrolist.desktop.model.DesktopSong
 import com.metrolist.desktop.repository.DesktopMusicRepository
 import com.metrolist.desktop.repository.LastPlaybackStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class RepeatMode {
     NONE,
@@ -25,9 +32,19 @@ class DesktopPlaybackManager(
     val repository: DesktopMusicRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     val lastPlaybackStore: LastPlaybackStore = LastPlaybackStore(),
+    private val streamUrlResolver: suspend (String) -> String? = { videoId -> repository.resolveStreamUrl(videoId) },
+    private val retryDelayProvider: (attempt: Int) -> Long = { attempt -> (attempt * 1500L).coerceAtMost(4000L) },
+    private val debounceDelayMs: Long = 200L,
 ) {
     private var hasLoadedMediaInSession: Boolean = false
+    private var loadedSongId: String? = null
     private var pendingInitialSeekMs: Long? = null
+    private var restoredSongId: String? = null
+    private var resumePositionMs: Long = 0L
+
+    @Volatile
+    private var userPaused: Boolean = false
+
     private val _queue = MutableStateFlow<List<DesktopSong>>(emptyList())
     val queue: StateFlow<List<DesktopSong>> = _queue.asStateFlow()
 
@@ -48,6 +65,17 @@ class DesktopPlaybackManager(
     private val _isResolving = MutableStateFlow(false)
     val isResolving: StateFlow<Boolean> = _isResolving.asStateFlow()
 
+    private val _isWaitingForNetwork = MutableStateFlow(false)
+    val isWaitingForNetwork: StateFlow<Boolean> = _isWaitingForNetwork.asStateFlow()
+
+    val isBuffering: StateFlow<Boolean> = combine(
+        _isResolving,
+        _isWaitingForNetwork,
+        player.isBuffering,
+    ) { resolving, waiting, playerBuffering ->
+        resolving || waiting || playerBuffering
+    }.stateIn(scope, SharingStarted.Eagerly, false)
+
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
@@ -55,14 +83,49 @@ class DesktopPlaybackManager(
     val currentPlaylistTitle: StateFlow<String?> = _currentPlaylistTitle.asStateFlow()
 
     private var playbackJob: Job? = null
+    private var stallWatchdogJob: Job? = null
     private var lastLocalVolume: Int = 100
     private var lastFinishedTime: Long = 0L
+    private val stateLock = Any()
+    private var playbackGeneration: Long = 0L
 
     init {
         player.onPlaybackFinished = {
+            val token = player.currentSessionToken
+            val songId = _currentSong.value?.id
             if (!GoogleCastManager.isConnected.value) {
                 scope.launch {
-                    handleTrackFinished()
+                    synchronized(stateLock) {
+                        if (player.currentSessionToken == token && _currentSong.value?.id == songId) {
+                            handleTrackFinished()
+                        }
+                    }
+                }
+            }
+        }
+
+        player.onPlaybackStarted = {
+            val token = player.currentSessionToken
+            val songId = _currentSong.value?.id
+            synchronized(stateLock) {
+                if (player.currentSessionToken == token && _currentSong.value?.id == songId) {
+                    _isResolving.value = false
+                    _isWaitingForNetwork.value = false
+                    _statusMessage.value = null
+                }
+            }
+        }
+
+        player.onPlaybackError = { lastPosMs ->
+            val token = player.currentSessionToken
+            val songId = _currentSong.value?.id
+            if (!GoogleCastManager.isConnected.value) {
+                scope.launch {
+                    synchronized(stateLock) {
+                        if (player.currentSessionToken == token && _currentSong.value?.id == songId) {
+                            handleStreamError(lastPosMs)
+                        }
+                    }
                 }
             }
         }
@@ -89,7 +152,8 @@ class DesktopPlaybackManager(
                 if (connected) {
                     player.setMute(true)
                     _currentSong.value?.let { song ->
-                        loadAndPlay(song)
+                        val pos = maxOf(resumePositionMs, player.currentPosition.value)
+                        loadAndPlay(song, startPositionMs = pos)
                     }
                 } else {
                     player.setMute(false)
@@ -107,8 +171,11 @@ class DesktopPlaybackManager(
                 _currentIndex.value = restored.currentIndex.coerceIn(0, q.size - 1)
                 _currentPlaylistTitle.value = restored.playlistTitle
                 hasLoadedMediaInSession = false
+                loadedSongId = null
+                restoredSongId = restored.currentSong.id
                 if (restored.lastPositionMs > 1000L) {
                     pendingInitialSeekMs = restored.lastPositionMs
+                    resumePositionMs = restored.lastPositionMs
                 }
                 player.setMetadata(
                     title = restored.currentSong.title,
@@ -140,19 +207,25 @@ class DesktopPlaybackManager(
 
     fun playSong(song: DesktopSong, sourceQueue: List<DesktopSong> = listOf(song)) {
         val queueToUse = if (sourceQueue.any { it.id == song.id }) sourceQueue else listOf(song) + sourceQueue
-        unShuffledQueue = queueToUse
-        _currentSong.value = song
-        _currentPlaylistTitle.value = null
+        synchronized(stateLock) {
+            unShuffledQueue = queueToUse
+            _currentSong.value = song
+            _currentPlaylistTitle.value = null
+            pendingInitialSeekMs = null
+            restoredSongId = null
 
-        if (_isShuffleEnabled.value) {
-            val otherSongs = queueToUse.filter { it.id != song.id }.shuffled()
-            val shuffledQueue = listOf(song) + otherSongs
-            _queue.value = shuffledQueue
-            _currentIndex.value = 0
-        } else {
-            _queue.value = queueToUse
-            val index = queueToUse.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-            _currentIndex.value = index
+            if (_isShuffleEnabled.value) {
+                val otherSongs = queueToUse.filter { it.id != song.id }.shuffled()
+                val shuffledQueue = listOf(song) + otherSongs
+                _queue.value = shuffledQueue
+                _currentIndex.value = 0
+            } else {
+                _queue.value = queueToUse
+                val index = queueToUse.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+                _currentIndex.value = index
+            }
+
+            loadAndPlay(song, startPositionMs = 0L)
         }
 
         // Jika antrean hanya 1 lagu (misal diputar langsung dari search dropdown),
@@ -160,21 +233,21 @@ class DesktopPlaybackManager(
         if (queueToUse.size <= 1) {
             scope.launch {
                 val related = repository.getRelatedSongs(song.id)
-                val currentQ = _queue.value
-                val currentQIds = currentQ.map { it.id }.toSet()
-                val newSongs = related.filter { !currentQIds.contains(it.id) }
-                if (newSongs.isNotEmpty()) {
-                    unShuffledQueue = unShuffledQueue + newSongs
-                    if (_isShuffleEnabled.value) {
-                        _queue.value = currentQ + newSongs.shuffled()
-                    } else {
-                        _queue.value = currentQ + newSongs
+                synchronized(stateLock) {
+                    val currentQ = _queue.value
+                    val currentQIds = currentQ.map { it.id }.toSet()
+                    val newSongs = related.filter { !currentQIds.contains(it.id) }
+                    if (newSongs.isNotEmpty()) {
+                        unShuffledQueue = unShuffledQueue + newSongs
+                        if (_isShuffleEnabled.value) {
+                            _queue.value = currentQ + newSongs.shuffled()
+                        } else {
+                            _queue.value = currentQ + newSongs
+                        }
                     }
                 }
             }
         }
-
-        loadAndPlay(song)
     }
 
     fun playPlaylist(
@@ -182,78 +255,90 @@ class DesktopPlaybackManager(
         startIndex: Int = 0,
         shuffle: Boolean = false,
     ) {
-        if (playlist.songs.isEmpty()) {
-            _statusMessage.value = "Playlist '${playlist.title}' kosong."
-            return
-        }
-
-        unShuffledQueue = playlist.songs
-        _currentPlaylistTitle.value = playlist.title
-
-        if (shuffle) {
-            _isShuffleEnabled.value = true
-            val safeIndex = startIndex.coerceIn(0, playlist.songs.size - 1)
-            val shuffled = if (startIndex > 0) {
-                val startSong = playlist.songs[safeIndex]
-                val remaining = playlist.songs.filterIndexed { i, _ -> i != safeIndex }.shuffled()
-                listOf(startSong) + remaining
-            } else {
-                playlist.songs.shuffled()
+        synchronized(stateLock) {
+            if (playlist.songs.isEmpty()) {
+                _statusMessage.value = "Playlist '${playlist.title}' kosong."
+                return
             }
-            _queue.value = shuffled
-            _currentIndex.value = 0
-            val targetSong = shuffled[0]
-            _currentSong.value = targetSong
-            loadAndPlay(targetSong)
-        } else {
-            _isShuffleEnabled.value = false
-            _queue.value = playlist.songs
-            val safeIndex = startIndex.coerceIn(0, playlist.songs.size - 1)
-            _currentIndex.value = safeIndex
-            val targetSong = playlist.songs[safeIndex]
-            _currentSong.value = targetSong
-            loadAndPlay(targetSong)
+
+            unShuffledQueue = playlist.songs
+            _currentPlaylistTitle.value = playlist.title
+            pendingInitialSeekMs = null
+            restoredSongId = null
+
+            if (shuffle) {
+                _isShuffleEnabled.value = true
+                val safeIndex = startIndex.coerceIn(0, playlist.songs.size - 1)
+                val shuffled = if (startIndex > 0) {
+                    val startSong = playlist.songs[safeIndex]
+                    val remaining = playlist.songs.filterIndexed { i, _ -> i != safeIndex }.shuffled()
+                    listOf(startSong) + remaining
+                } else {
+                    playlist.songs.shuffled()
+                }
+                _queue.value = shuffled
+                _currentIndex.value = 0
+                val targetSong = shuffled[0]
+                _currentSong.value = targetSong
+                loadAndPlay(targetSong, startPositionMs = 0L)
+            } else {
+                _isShuffleEnabled.value = false
+                _queue.value = playlist.songs
+                val safeIndex = startIndex.coerceIn(0, playlist.songs.size - 1)
+                _currentIndex.value = safeIndex
+                val targetSong = playlist.songs[safeIndex]
+                _currentSong.value = targetSong
+                loadAndPlay(targetSong, startPositionMs = 0L)
+            }
         }
     }
 
     fun playNext() {
-        val q = _queue.value
-        if (q.isEmpty()) return
+        synchronized(stateLock) {
+            val q = _queue.value
+            if (q.isEmpty()) return
 
-        val current = _currentIndex.value
-        val nextIndex = if (current >= q.size - 1) {
-            if (_repeatMode.value == RepeatMode.ALL) 0 else return
-        } else {
-            current + 1
+            val current = _currentIndex.value
+            val nextIndex = if (current >= q.size - 1) {
+                if (_repeatMode.value == RepeatMode.ALL) 0 else return
+            } else {
+                current + 1
+            }
+
+            pendingInitialSeekMs = null
+            restoredSongId = null
+            _currentIndex.value = nextIndex
+            val nextSong = q[nextIndex]
+            _currentSong.value = nextSong
+            loadAndPlay(nextSong, startPositionMs = 0L)
         }
-
-        _currentIndex.value = nextIndex
-        val nextSong = q[nextIndex]
-        _currentSong.value = nextSong
-        loadAndPlay(nextSong)
     }
 
     fun playPrevious() {
-        val q = _queue.value
-        if (q.isEmpty()) return
+        synchronized(stateLock) {
+            val q = _queue.value
+            if (q.isEmpty()) return
 
-        // Jika lagu sudah berjalan lebih dari 4 detik, ulangi dari awal
-        if (player.currentPosition.value > 4000L) {
-            seekTo(0L)
-            return
+            // Jika lagu sudah berjalan lebih dari 4 detik, ulangi dari awal
+            if (player.currentPosition.value > 4000L) {
+                seekTo(0L)
+                return
+            }
+
+            val current = _currentIndex.value
+            val prevIndex = if (current <= 0) {
+                if (_repeatMode.value == RepeatMode.ALL) q.size - 1 else 0
+            } else {
+                current - 1
+            }
+
+            pendingInitialSeekMs = null
+            restoredSongId = null
+            _currentIndex.value = prevIndex
+            val prevSong = q[prevIndex]
+            _currentSong.value = prevSong
+            loadAndPlay(prevSong, startPositionMs = 0L)
         }
-
-        val current = _currentIndex.value
-        val prevIndex = if (current <= 0) {
-            if (_repeatMode.value == RepeatMode.ALL) q.size - 1 else 0
-        } else {
-            current - 1
-        }
-
-        _currentIndex.value = prevIndex
-        val prevSong = q[prevIndex]
-        _currentSong.value = prevSong
-        loadAndPlay(prevSong)
     }
 
     fun toggleShuffle() {
@@ -313,6 +398,23 @@ class DesktopPlaybackManager(
         }
     }
 
+    private fun handleStreamError(lastPosMs: Long) {
+        val activeSong = _currentSong.value ?: return
+        val savedPos = maxOf(resumePositionMs, lastPosMs)
+        resumePositionMs = savedPos
+        hasLoadedMediaInSession = false
+        loadedSongId = null
+        stallWatchdogJob?.cancel()
+
+        if (userPaused || player.isReleased) {
+            return
+        }
+
+        _isWaitingForNetwork.value = true
+        _statusMessage.value = "Sinyal terputus, mencoba menyambung ulang '${activeSong.title}'..."
+        loadAndPlay(activeSong, startPositionMs = savedPos)
+    }
+
     private fun handleTrackFinished() {
         val now = System.currentTimeMillis()
         if (now - lastFinishedTime < 1500L) return
@@ -320,7 +422,7 @@ class DesktopPlaybackManager(
 
         when (_repeatMode.value) {
             RepeatMode.ONE -> {
-                _currentSong.value?.let { loadAndPlay(it) }
+                _currentSong.value?.let { loadAndPlay(it, startPositionMs = 0L) }
             }
             RepeatMode.ALL -> {
                 playNext()
@@ -355,50 +457,129 @@ class DesktopPlaybackManager(
         }
     }
 
-    private fun loadAndPlay(song: DesktopSong) {
-        hasLoadedMediaInSession = true
+    private fun loadAndPlay(song: DesktopSong, startPositionMs: Long = 0L) = synchronized(stateLock) {
+        val generation = ++playbackGeneration
+        userPaused = false
+        hasLoadedMediaInSession = false
+        loadedSongId = null
+
+        val restoredPos = if (restoredSongId == song.id) (pendingInitialSeekMs ?: 0L) else 0L
+        if (restoredSongId == song.id) {
+            pendingInitialSeekMs = null
+            restoredSongId = null
+        }
+
+        val targetStartPos = maxOf(startPositionMs, restoredPos).coerceAtLeast(0L)
+        resumePositionMs = targetStartPos
+        val expectedDurationMs = parseDurationTextToMs(song.durationText)
+
+        // Hentikan media sebelumnya dan perbarui metadata segera agar tidak pernah memutar lagu lama saat offline
+        player.prepareForNewTrack(
+            title = song.title,
+            artist = song.artist,
+            thumbnailUrl = song.thumbnailUrl,
+            initialPositionMs = targetStartPos,
+            expectedDurationMs = expectedDurationMs,
+        )
+
         scope.launch {
             lastPlaybackStore.saveLastPlayback(
                 song = song,
                 queue = _queue.value,
                 currentIndex = _currentIndex.value,
                 playlistTitle = _currentPlaylistTitle.value,
-                positionMs = player.currentPosition.value,
+                positionMs = targetStartPos,
             )
         }
+
         playbackJob?.cancel()
+        stallWatchdogJob?.cancel()
         playbackJob = scope.launch {
-            // Debounce klik beruntun (spam next/previous/song) agar tidak membanjiri antrean & network
-            delay(250)
+            if (debounceDelayMs > 0L) {
+                delay(debounceDelayMs)
+            }
+            if (!isActive || userPaused || _currentSong.value?.id != song.id || player.isReleased || playbackGeneration != generation) return@launch
 
             val isCast = GoogleCastManager.isConnected.value
             val localAudio = repository.downloadManager.getDownloadedAudioFile(song.id)
             val hasLocalAudio = localAudio != null && localAudio.exists()
 
-            // 1. Dapatkan remote stream URL jika Cast aktif atau audio lokal belum diunduh
-            val remoteStreamUrl = if (isCast || !hasLocalAudio) {
-                _isResolving.value = true
-                val devName = GoogleCastManager.connectedDevice.value?.name ?: "TV"
-                _statusMessage.value = if (isCast) "Streaming '${song.title}' ke $devName..." else "Memuat audio: ${song.title}..."
-                val url = repository.resolveStreamUrl(song.id)
+            // 1. Dapatkan remote stream URL dengan retry sampai koneksi pulih jika belum diunduh lokal
+            var remoteStreamUrl: String? = null
+            if (isCast || !hasLocalAudio) {
+                var attempt = 0
+                while (isActive && !userPaused && _currentSong.value?.id == song.id && !player.isReleased && playbackGeneration == generation) {
+                    attempt++
+                    _isResolving.value = true
+                    if (attempt > 1) {
+                        _isWaitingForNetwork.value = true
+                    }
+                    val devName = GoogleCastManager.connectedDevice.value?.name ?: "TV"
+                    _statusMessage.value = when {
+                        attempt > 1 -> "Sinyal terputus, menunggu koneksi untuk '${song.title}'..."
+                        isCast -> "Streaming '${song.title}' ke $devName..."
+                        else -> "Memuat audio: ${song.title}..."
+                    }
+
+                    val url = try {
+                        streamUrlResolver(song.id)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        null
+                    }
+
+                    if (!url.isNullOrBlank()) {
+                        remoteStreamUrl = url
+                        break
+                    }
+
+                    if (!isCast && !player.isAvailable) {
+                        _isResolving.value = false
+                        _isWaitingForNetwork.value = false
+                        player.setBuffering(false)
+                        _statusMessage.value = "LibVLC belum terinstal pada sistem. Silakan pasang VLC (64-bit)."
+                        return@launch
+                    }
+
+                    _isResolving.value = false
+                    _isWaitingForNetwork.value = true
+                    player.setBuffering(true)
+                    _statusMessage.value = "Sinyal terputus, menunggu koneksi untuk '${song.title}'..."
+                    val backoffMs = retryDelayProvider(attempt)
+                    if (backoffMs > 0L) {
+                        delay(backoffMs)
+                    }
+                }
+            }
+
+            if (!isActive || userPaused || _currentSong.value?.id != song.id || player.isReleased || playbackGeneration != generation) {
                 _isResolving.value = false
-                url
-            } else {
-                null
+                return@launch
             }
 
             _isResolving.value = false
-            _statusMessage.value = null
+            _isWaitingForNetwork.value = false
 
             // 2. Putar ke Cast jika terhubung
             if (isCast) {
                 if (!remoteStreamUrl.isNullOrBlank()) {
+                    _statusMessage.value = null
                     GoogleCastManager.loadMedia(
                         streamUrl = remoteStreamUrl,
                         title = song.title,
                         artist = song.artist,
                         thumbnailUrl = song.thumbnailUrl,
                     )
+                    if (resumePositionMs > 1000L) {
+                        val seekPos = resumePositionMs
+                        scope.launch {
+                            delay(600)
+                            if (GoogleCastManager.isConnected.value && _currentSong.value?.id == song.id) {
+                                GoogleCastManager.seek(seekPos)
+                            }
+                        }
+                    }
                 } else {
                     _statusMessage.value = "Gagal memuat stream TV untuk '${song.title}'."
                 }
@@ -408,71 +589,188 @@ class DesktopPlaybackManager(
             val playUrl = if (hasLocalAudio) localAudio.absolutePath else remoteStreamUrl
             if (!playUrl.isNullOrBlank()) {
                 if (!isCast && !player.isAvailable) {
+                    player.setBuffering(false)
                     _statusMessage.value = "LibVLC belum terinstal pada sistem. Silakan pasang VLC (64-bit)."
+                    return@launch
+                }
+                val startPosSnapshot = synchronized(stateLock) {
+                    if (!isActive || userPaused || _currentSong.value?.id != song.id || player.isReleased || playbackGeneration != generation) {
+                        return@launch
+                    }
+                    loadedSongId = song.id
+                    hasLoadedMediaInSession = true
+                    resumePositionMs
                 }
                 player.play(
                     url = playUrl,
                     title = song.title,
                     artist = song.artist,
                     thumbnailUrl = song.thumbnailUrl,
+                    startPositionMs = startPosSnapshot,
+                    expectedDurationMs = expectedDurationMs,
                 )
-                val initialSeek = pendingInitialSeekMs
-                pendingInitialSeekMs = null
-                if (initialSeek != null && initialSeek > 1000L) {
-                    scope.launch {
-                        delay(600)
-                        player.seekTo(initialSeek)
-                    }
-                }
                 player.setMute(isCast)
+                if (hasLocalAudio) {
+                    _statusMessage.value = null
+                } else if (!isCast) {
+                    startStallWatchdog(song)
+                }
             } else if (!isCast) {
+                player.setBuffering(false)
                 _statusMessage.value = "Koneksi terputus dan lagu '${song.title}' belum diunduh untuk offline."
             }
         }
     }
 
-    fun togglePlayPause() {
-        if (!player.isPlaying.value && !hasLoadedMediaInSession && _currentSong.value != null) {
-            loadAndPlay(_currentSong.value!!)
-            return
-        }
+    private fun startStallWatchdog(song: DesktopSong) {
+        stallWatchdogJob?.cancel()
+        stallWatchdogJob = scope.launch {
+            var lastObservedPos = player.currentPosition.value
+            var stalledMs = 0L
+            var unstartedIdleMs = 0L
+            while (isActive && !userPaused && _currentSong.value?.id == song.id && !player.isReleased) {
+                delay(2000L)
+                if (!isActive || userPaused || _currentSong.value?.id != song.id || player.isReleased) break
+                if (GoogleCastManager.isConnected.value) break
 
-        if (GoogleCastManager.isConnected.value) {
-            if (player.isPlaying.value) {
-                GoogleCastManager.pause()
-                player.pause()
-            } else {
-                GoogleCastManager.resume()
-                player.resume()
+                val curPos = player.currentPosition.value
+                if (curPos > resumePositionMs) {
+                    resumePositionMs = curPos
+                }
+
+                val isBufferingNow = player.isBuffering.value
+                val isPlayingNow = player.isPlaying.value
+
+                if (isBufferingNow) {
+                    stalledMs += 2000L
+                    unstartedIdleMs = 0L
+                    _statusMessage.value = "Buffering '${song.title}'..."
+                } else if (isPlayingNow) {
+                    unstartedIdleMs = 0L
+                    if (curPos == lastObservedPos) {
+                        stalledMs += 2000L
+                    } else {
+                        lastObservedPos = curPos
+                        stalledMs = 0L
+                    }
+                } else {
+                    // Jika tidak playing dan tidak buffering padahal tidak di-pause user,
+                    // bisa terjadi bila resume()/play() gagal diam-diam akibat socket terputus.
+                    unstartedIdleMs += 2000L
+                    stalledMs += 2000L
+                    if (unstartedIdleMs < 6000L) {
+                        continue
+                    }
+                }
+
+                if (stalledMs >= 12_000L || unstartedIdleMs >= 6000L) {
+                    synchronized(stateLock) {
+                        if (!isActive || userPaused || _currentSong.value?.id != song.id || player.isReleased) return@synchronized
+                        val recoverPos = maxOf(resumePositionMs, curPos)
+                        resumePositionMs = recoverPos
+                        hasLoadedMediaInSession = false
+                        loadedSongId = null
+                        _isWaitingForNetwork.value = true
+                        _statusMessage.value = "Sinyal melambat, menyambung ulang '${song.title}'..."
+                        loadAndPlay(song, startPositionMs = recoverPos)
+                    }
+                    break
+                }
             }
+        }
+    }
+
+    fun togglePlayPause() {
+        val song = _currentSong.value ?: return
+        if (player.isPlaying.value) {
+            pause()
         } else {
-            player.togglePlayPause()
+            resume()
         }
     }
 
     fun pause() {
-        if (GoogleCastManager.isConnected.value) {
-            GoogleCastManager.pause()
+        synchronized(stateLock) {
+            playbackGeneration++
+            userPaused = true
+            playbackJob?.cancel()
+            stallWatchdogJob?.cancel()
+            _isResolving.value = false
+            _isWaitingForNetwork.value = false
+            val curPos = player.currentPosition.value
+            if (curPos > 0L) {
+                resumePositionMs = curPos
+            }
+            if (GoogleCastManager.isConnected.value) {
+                GoogleCastManager.pause()
+            }
+            player.pause()
+            _statusMessage.value = null
+            savePlaybackPositionNow()
         }
-        player.pause()
     }
 
     fun resume() {
-        if (!player.isPlaying.value && !hasLoadedMediaInSession && _currentSong.value != null) {
-            loadAndPlay(_currentSong.value!!)
-            return
-        }
+        synchronized(stateLock) {
+            val song = _currentSong.value ?: return
+            userPaused = false
 
-        if (GoogleCastManager.isConnected.value) {
-            GoogleCastManager.resume()
+            // Jika sudah aktif me-resolve URL stream di jaringan (bukan sedang sleep backoff), biarkan berlanjut
+            if (playbackJob?.isActive == true && _isResolving.value && !_isWaitingForNetwork.value) {
+                return
+            }
+
+            val isSameSongLoaded = loadedSongId == song.id &&
+                hasLoadedMediaInSession &&
+                player.hasPlayableMedia.value &&
+                player.hasStartedMedia
+
+            if (!isSameSongLoaded || _isWaitingForNetwork.value) {
+                val targetPos = maxOf(
+                    resumePositionMs,
+                    if (restoredSongId == song.id) (pendingInitialSeekMs ?: 0L) else 0L,
+                    player.currentPosition.value,
+                )
+                // Jika masih dalam delay backoff menunggu jaringan atau media belum siap, mulai ulang segera
+                loadAndPlay(song, startPositionMs = targetPos)
+                return
+            }
+
+            if (player.isBuffering.value) {
+                // Sedang buffering stream lagu aktif — pastikan watchdog aktif dan tunggu sampai benar-benar terputar
+                startStallWatchdog(song)
+                return
+            }
+
+            if (GoogleCastManager.isConnected.value) {
+                GoogleCastManager.resume()
+            }
+            if (!player.resumeIfLoaded()) {
+                val targetPos = maxOf(resumePositionMs, player.currentPosition.value)
+                loadAndPlay(song, startPositionMs = targetPos)
+            } else {
+                startStallWatchdog(song)
+            }
         }
-        player.resume()
     }
 
     fun seekTo(positionMs: Long) {
-        player.seekTo(positionMs)
-        if (GoogleCastManager.isConnected.value) {
-            GoogleCastManager.seek(positionMs)
+        synchronized(stateLock) {
+            val safePos = positionMs.coerceAtLeast(0L)
+            resumePositionMs = safePos
+            val activeSong = _currentSong.value
+            if (activeSong != null && restoredSongId == activeSong.id) {
+                pendingInitialSeekMs = safePos
+            }
+            val isSameSongLoaded = activeSong != null && loadedSongId == activeSong.id && hasLoadedMediaInSession && player.hasPlayableMedia.value
+            if (isSameSongLoaded) {
+                player.seekTo(safePos)
+                if (GoogleCastManager.isConnected.value) {
+                    GoogleCastManager.seek(safePos)
+                }
+            } else {
+                player.updatePositionOnly(safePos)
+            }
         }
     }
 
@@ -486,7 +784,52 @@ class DesktopPlaybackManager(
         }
     }
 
+    fun savePlaybackPositionNow() {
+        val song = _currentSong.value ?: return
+        val pos = maxOf(resumePositionMs, player.currentPosition.value)
+        scope.launch {
+            lastPlaybackStore.saveLastPlayback(
+                song = song,
+                queue = _queue.value,
+                currentIndex = _currentIndex.value,
+                playlistTitle = _currentPlaylistTitle.value,
+                positionMs = pos,
+            )
+        }
+    }
+
+    fun savePlaybackPositionBlocking(timeoutMs: Long = 250L) {
+        val snapshot = synchronized(stateLock) {
+            val song = _currentSong.value ?: return
+            val pos = maxOf(resumePositionMs, player.currentPosition.value)
+            Triple(song, _queue.value, Triple(_currentIndex.value, _currentPlaylistTitle.value, pos))
+        }
+        try {
+            runBlocking {
+                withTimeoutOrNull(timeoutMs) {
+                    lastPlaybackStore.saveLastPlayback(
+                        song = snapshot.first,
+                        queue = snapshot.second,
+                        currentIndex = snapshot.third.first,
+                        playlistTitle = snapshot.third.second,
+                        positionMs = snapshot.third.third,
+                    )
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
     fun clearStatusMessage() {
         _statusMessage.value = null
+    }
+
+    private fun parseDurationTextToMs(durationText: String?): Long {
+        if (durationText.isNullOrBlank()) return 0L
+        val parts = durationText.trim().split(":").mapNotNull { it.toIntOrNull() }
+        return when (parts.size) {
+            2 -> (parts[0] * 60L + parts[1]) * 1000L
+            3 -> (parts[0] * 3600L + parts[1] * 60L + parts[2]) * 1000L
+            else -> 0L
+        }
     }
 }

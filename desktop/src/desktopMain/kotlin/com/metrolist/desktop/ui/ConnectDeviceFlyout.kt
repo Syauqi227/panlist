@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.metrolist.desktop.cast.DeviceDiscoveryService
@@ -57,17 +58,12 @@ fun ConnectDeviceFlyout(
         shape = DesktopRadii.Card,
         colors = CardDefaults.cardColors(containerColor = DesktopColors.Carbon),
         border = BorderStroke(1.dp, DesktopColors.Border),
-        modifier = modifier
-            .width(360.dp)
-            .heightIn(min = 420.dp, max = 560.dp)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                // Mencegah klik di dalam flyout menutup flyout
-            },
+        modifier = modifier.fillMaxHeight(),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .padding(16.dp),
         ) {
             // --- 1. Header: "Connect" & Close Button ---
             Row(
@@ -79,11 +75,17 @@ fun ConnectDeviceFlyout(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    Icon(
+                        Icons.Default.Devices,
+                        contentDescription = null,
+                        tint = DesktopColors.AcidLime,
+                        modifier = Modifier.size(19.dp),
+                    )
                     Text(
-                        text = "Connect",
+                        text = "Connect ke TV",
                         color = DesktopColors.Paper,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
                     )
                     if (isScanning || isCastConnecting) {
                         CircularProgressIndicator(
@@ -339,6 +341,8 @@ fun ConnectDeviceFlyout(
                                         color = if (isSelected) DesktopColors.AcidLime else DesktopColors.Paper,
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 13.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Row(
@@ -355,6 +359,8 @@ fun ConnectDeviceFlyout(
                                                 text = "Menghubungkan ke ${dev.name}...",
                                                 color = DesktopColors.AcidLime,
                                                 fontSize = 11.5.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
                                             )
                                         } else if (isConnectedToThis) {
                                             Icon(
@@ -368,6 +374,8 @@ fun ConnectDeviceFlyout(
                                                 color = DesktopColors.AcidLime,
                                                 fontSize = 11.5.sp,
                                                 fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
                                             )
                                         } else {
                                             Icon(
@@ -380,6 +388,8 @@ fun ConnectDeviceFlyout(
                                                 text = dev.protocol,
                                                 color = DesktopColors.Fog,
                                                 fontSize = 11.5.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
                                             )
                                         }
                                     }

@@ -72,9 +72,13 @@ fun PlaylistView(
     repository: DesktopMusicRepository,
     playbackManager: DesktopPlaybackManager,
     activePlaylistId: String? = null,
+    playlistRefreshTick: Int = 0,
     onOpenPlaylist: ((String) -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     onAddToPlaylistRequest: (DesktopSong) -> Unit,
+    onAddSongDirectlyRequest: ((DesktopPlaylist) -> Unit)? = null,
+    onPlaylistDeletedNotify: ((String) -> Unit)? = null,
+    onPlaylistMutated: (() -> Unit)? = null,
 ) {
     var localActivePlaylistId by remember { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -106,6 +110,7 @@ fun PlaylistView(
                 scope.launch {
                     val newPl = repository.createLocalPlaylist(title, description)
                     showCreateDialog = false
+                    onPlaylistMutated?.invoke()
                     handleOpenPlaylist(newPl.id)
                 }
             }
@@ -118,6 +123,7 @@ fun PlaylistView(
             onDismissRequest = { showSpotifyDialog = false },
             onPlaylistImported = { imported ->
                 showSpotifyDialog = false
+                onPlaylistMutated?.invoke()
                 handleOpenPlaylist(imported.id)
             }
         )
@@ -127,17 +133,27 @@ fun PlaylistView(
             playlistId = currentPlaylistId,
             repository = repository,
             playbackManager = playbackManager,
+            playlistRefreshTick = playlistRefreshTick,
             onBack = handleBack,
             onAddToPlaylistRequest = onAddToPlaylistRequest,
-            onPlaylistDeleted = handleBack,
+            onAddSongDirectlyRequest = onAddSongDirectlyRequest,
+            onPlaylistMutated = onPlaylistMutated,
+            onPlaylistDeleted = { deletedId ->
+                onPlaylistDeletedNotify?.invoke(deletedId)
+                onPlaylistMutated?.invoke()
+                handleBack()
+            },
         )
     } else {
         PlaylistOverviewView(
             repository = repository,
             playbackManager = playbackManager,
+            playlistRefreshTick = playlistRefreshTick,
             onSelectPlaylist = handleOpenPlaylist,
             onCreatePlaylistClick = { showCreateDialog = true },
             onImportSpotifyClick = { showSpotifyDialog = true },
+            onPlaylistMutated = onPlaylistMutated,
+            onPlaylistDeletedNotify = onPlaylistDeletedNotify,
         )
     }
 }
@@ -214,9 +230,12 @@ private fun HoverActionButton(
 private fun PlaylistOverviewView(
     repository: DesktopMusicRepository,
     playbackManager: DesktopPlaybackManager,
+    playlistRefreshTick: Int = 0,
     onSelectPlaylist: (String) -> Unit,
     onCreatePlaylistClick: () -> Unit,
     onImportSpotifyClick: () -> Unit,
+    onPlaylistMutated: (() -> Unit)? = null,
+    onPlaylistDeletedNotify: ((String) -> Unit)? = null,
 ) {
     var selectedCategoryIndex by remember { mutableStateOf(0) }
     val categories = listOf("Semua", "Playlist Lokal", "Lagu Offline (Terunduh)", "Rekomendasi YouTube", "Cari Playlist Online")
@@ -230,7 +249,6 @@ private fun PlaylistOverviewView(
     var isSearching by remember { mutableStateOf(false) }
 
     var playlistToDelete by remember { mutableStateOf<DesktopPlaylist?>(null) }
-    var playlistToAddSongDirectly by remember { mutableStateOf<DesktopPlaylist?>(null) }
 
     val currentPlaylistTitle by playbackManager.currentPlaylistTitle.collectAsState()
     val isPlaying by playbackManager.player.isPlaying.collectAsState()
@@ -279,6 +297,12 @@ private fun PlaylistOverviewView(
         loadData()
     }
 
+    LaunchedEffect(playlistRefreshTick) {
+        if (playlistRefreshTick > 0) {
+            localPlaylists = repository.getLocalPlaylists()
+        }
+    }
+
     if (playlistToDelete != null) {
         AlertDialog(
             onDismissRequest = { playlistToDelete = null },
@@ -292,6 +316,8 @@ private fun PlaylistOverviewView(
                                 repository.deleteLocalPlaylist(pl.id)
                                 localPlaylists = repository.getLocalPlaylists()
                                 playlistToDelete = null
+                                onPlaylistDeletedNotify?.invoke(pl.id)
+                                onPlaylistMutated?.invoke()
                             }
                         }
                     },
@@ -308,20 +334,6 @@ private fun PlaylistOverviewView(
             },
             containerColor = DesktopColors.Obsidian,
             shape = DesktopRadii.Card,
-        )
-    }
-
-    if (playlistToAddSongDirectly != null) {
-        AddSongDirectlyDialog(
-            playlist = playlistToAddSongDirectly!!,
-            repository = repository,
-            onDismissRequest = {
-                playlistToAddSongDirectly = null
-                loadData()
-            },
-            onSongAdded = {
-                loadData()
-            },
         )
     }
 
@@ -963,45 +975,34 @@ fun PlaylistDetailView(
     playlistId: String,
     repository: DesktopMusicRepository,
     playbackManager: DesktopPlaybackManager,
+    playlistRefreshTick: Int = 0,
     onBack: () -> Unit,
     onAddToPlaylistRequest: (DesktopSong) -> Unit,
-    onPlaylistDeleted: () -> Unit,
+    onAddSongDirectlyRequest: ((DesktopPlaylist) -> Unit)? = null,
+    onPlaylistMutated: (() -> Unit)? = null,
+    onPlaylistDeleted: (String) -> Unit,
 ) {
     var playlist by remember { mutableStateOf<DesktopPlaylist?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var searchSongQuery by remember { mutableStateOf("") }
     var statusFeedback by remember { mutableStateOf<String?>(null) }
-    var showAddSongDirectlyDialog by remember { mutableStateOf(false) }
     var isDownloadingPlaylist by remember { mutableStateOf(false) }
 
     val currentSong by playbackManager.currentSong.collectAsState()
     val isPlaying by playbackManager.player.isPlaying.collectAsState()
     val scope = rememberCoroutineScope()
 
-    fun loadDetails() {
+    fun loadDetails(showSkeleton: Boolean = true) {
         scope.launch {
-            isLoading = true
+            if (showSkeleton) isLoading = true
             playlist = repository.getPlaylistDetails(playlistId)
             isLoading = false
         }
     }
 
-    LaunchedEffect(playlistId) {
-        loadDetails()
-    }
-
-    if (showAddSongDirectlyDialog && playlist != null) {
-        AddSongDirectlyDialog(
-            playlist = playlist!!,
-            repository = repository,
-            onDismissRequest = {
-                showAddSongDirectlyDialog = false
-                loadDetails()
-            },
-            onSongAdded = {
-                loadDetails()
-            },
-        )
+    LaunchedEffect(playlistId, playlistRefreshTick) {
+        val showSkeleton = playlist == null || playlist?.id != playlistId
+        loadDetails(showSkeleton = showSkeleton)
     }
 
     if (isLoading) {
@@ -1031,9 +1032,9 @@ fun PlaylistDetailView(
 
     val onPlayPlaylistToggle = {
         if (isCurrentPlaylistPlaying) {
-            playbackManager.player.pause()
+            playbackManager.pause()
         } else if (isSongFromThisPlaylist) {
-            playbackManager.player.resume()
+            playbackManager.resume()
         } else {
             playbackManager.playPlaylist(pl, startIndex = 0, shuffle = false)
         }
@@ -1144,17 +1145,18 @@ fun PlaylistDetailView(
                                 statusFeedback = "Selesai mengunduh playlist untuk offline!"
                             }
                         },
-                        onAddSongClick = { showAddSongDirectlyDialog = true },
+                        onAddSongClick = { onAddSongDirectlyRequest?.invoke(pl) },
                         onDeleteClick = {
                             scope.launch {
                                 repository.deleteLocalPlaylist(pl.id)
-                                onPlaylistDeleted()
+                                onPlaylistDeleted(pl.id)
                             }
                         },
                         onSaveToLocalClick = {
                             scope.launch {
                                 repository.importOnlinePlaylistToLocal(pl)
                                 statusFeedback = "Playlist berhasil disimpan ke lokal!"
+                                onPlaylistMutated?.invoke()
                             }
                         },
                         statusFeedback = statusFeedback,
@@ -1218,7 +1220,7 @@ fun PlaylistDetailView(
                                     if (pl.isLocal) {
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Button(
-                                            onClick = { showAddSongDirectlyDialog = true },
+                                            onClick = { onAddSongDirectlyRequest?.invoke(pl) },
                                             colors = ButtonDefaults.buttonColors(containerColor = DesktopColors.AcidLime),
                                             shape = DesktopRadii.Button,
                                         ) {
@@ -1271,14 +1273,14 @@ fun PlaylistDetailView(
                             },
                             onPlayClick = {
                                 if (isThisSongCurrent) {
-                                    playbackManager.player.resume()
+                                    playbackManager.resume()
                                 } else {
                                     val actualIndex = pl.songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
                                     playbackManager.playPlaylist(pl, startIndex = actualIndex)
                                 }
                             },
                             onPauseClick = {
-                                playbackManager.player.pause()
+                                playbackManager.pause()
                             },
                             onToggleDownload = {
                                 scope.launch {
@@ -1302,7 +1304,8 @@ fun PlaylistDetailView(
                             onDeleteFromPlaylist = {
                                 scope.launch {
                                     repository.removeSongFromLocalPlaylist(pl.id, song.id)
-                                    loadDetails()
+                                    loadDetails(showSkeleton = false)
+                                    onPlaylistMutated?.invoke()
                                 }
                             },
                         )
@@ -1518,122 +1521,126 @@ private fun PlaylistActionBar(
             .fillMaxWidth()
             .padding(horizontal = 28.dp, vertical = 12.dp)
     ) {
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            // Big circular Play Button (52dp)
-            Surface(
-                onClick = onPlayClick,
-                shape = CircleShape,
-                color = DesktopColors.AcidLime,
-                enabled = playlist.songs.isNotEmpty(),
-                modifier = Modifier.size(50.dp),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Jeda" else "Putar Semua",
-                        tint = DesktopColors.Void,
-                        modifier = Modifier.size(28.dp),
-                    )
+                // Big circular Play Button (52dp)
+                Surface(
+                    onClick = onPlayClick,
+                    shape = CircleShape,
+                    color = DesktopColors.AcidLime,
+                    enabled = playlist.songs.isNotEmpty(),
+                    modifier = Modifier.size(50.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Jeda" else "Putar Semua",
+                            tint = DesktopColors.Void,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(16.dp))
 
-            // Shuffle Button
-            IconButton(
-                onClick = onShuffleClick,
-                enabled = playlist.songs.isNotEmpty(),
-                modifier = Modifier.size(38.dp),
-            ) {
-                Icon(
-                    Icons.Default.Shuffle,
-                    contentDescription = "Acak Antrean",
-                    tint = DesktopColors.Fog,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.width(6.dp))
-
-            // Download Button
-            IconButton(
-                onClick = onDownloadClick,
-                enabled = playlist.songs.isNotEmpty() && !isDownloading,
-                modifier = Modifier.size(38.dp),
-            ) {
-                if (isDownloading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = DesktopColors.AcidLime,
-                        strokeWidth = 2.dp,
-                    )
-                } else {
+                // Shuffle Button
+                IconButton(
+                    onClick = onShuffleClick,
+                    enabled = playlist.songs.isNotEmpty(),
+                    modifier = Modifier.size(38.dp),
+                ) {
                     Icon(
-                        Icons.Default.Download,
-                        contentDescription = "Download Playlist Offline",
+                        Icons.Default.Shuffle,
+                        contentDescription = "Acak Antrean",
                         tint = DesktopColors.Fog,
                         modifier = Modifier.size(20.dp),
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-            if (playlist.isLocal) {
-                // + Tambah Lagu button
-                Button(
-                    onClick = onAddSongClick,
-                    shape = DesktopRadii.Button,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DesktopColors.Obsidian,
-                        contentColor = DesktopColors.Paper,
-                    ),
-                    border = BorderStroke(1.dp, DesktopColors.Border),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp),
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = DesktopColors.AcidLime, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Tambah Lagu", fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Hapus Playlist button
+                // Download Button
                 IconButton(
-                    onClick = onDeleteClick,
-                    modifier = Modifier.size(34.dp),
+                    onClick = onDownloadClick,
+                    enabled = playlist.songs.isNotEmpty() && !isDownloading,
+                    modifier = Modifier.size(38.dp),
                 ) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Hapus Playlist",
-                        tint = DesktopColors.Ash,
-                        modifier = Modifier.size(16.dp),
-                    )
+                    if (isDownloading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = DesktopColors.AcidLime,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download Playlist Offline",
+                            tint = DesktopColors.Fog,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
-            } else {
-                // Simpan ke Lokal button
-                Button(
-                    onClick = onSaveToLocalClick,
-                    shape = DesktopRadii.Button,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DesktopColors.Obsidian,
-                        contentColor = DesktopColors.Paper,
-                    ),
-                    border = BorderStroke(1.dp, DesktopColors.Border),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp),
-                ) {
-                    Icon(Icons.Default.BookmarkAdd, contentDescription = null, tint = DesktopColors.Paper, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Simpan ke Lokal", fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                if (playlist.isLocal) {
+                    // + Tambah Lagu button
+                    Button(
+                        onClick = onAddSongClick,
+                        shape = DesktopRadii.Button,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DesktopColors.Obsidian,
+                            contentColor = DesktopColors.Paper,
+                        ),
+                        border = BorderStroke(1.dp, DesktopColors.Border),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp),
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = DesktopColors.AcidLime, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Tambah Lagu", fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Hapus Playlist button
+                    IconButton(
+                        onClick = onDeleteClick,
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Hapus Playlist",
+                            tint = DesktopColors.Ash,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                } else {
+                    // Simpan ke Lokal button
+                    Button(
+                        onClick = onSaveToLocalClick,
+                        shape = DesktopRadii.Button,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DesktopColors.Obsidian,
+                            contentColor = DesktopColors.Paper,
+                        ),
+                        border = BorderStroke(1.dp, DesktopColors.Border),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp),
+                    ) {
+                        Icon(Icons.Default.BookmarkAdd, contentDescription = null, tint = DesktopColors.Paper, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Simpan ke Lokal", fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                    }
                 }
             }
-
-            Spacer(modifier = Modifier.weight(1f))
 
             // Filter search input
             Surface(
@@ -1641,7 +1648,7 @@ private fun PlaylistActionBar(
                 color = DesktopColors.Obsidian,
                 border = BorderStroke(1.dp, if (searchQuery.isNotEmpty()) DesktopColors.Smoke else DesktopColors.Border),
                 modifier = Modifier
-                    .width(220.dp)
+                    .widthIn(min = 170.dp, max = 220.dp)
                     .height(34.dp),
             ) {
                 Row(

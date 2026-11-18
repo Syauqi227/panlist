@@ -1,9 +1,13 @@
 package com.metrolist.desktop.ui
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -482,6 +486,7 @@ fun DesktopLyricsPageView(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            .background(DesktopColors.Carbon)
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
@@ -491,6 +496,10 @@ fun DesktopLyricsPageView(
                     )
                 )
             )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {}
     ) {
         val pageW = maxWidth
         val isWideLayout = pageW >= 780.dp
@@ -637,7 +646,19 @@ fun DesktopLyricsPageView(
             }
 
             // === 2. BODY CONTENT ===
-            if (isLoadingLyrics) {
+            val bodyState = when {
+                isLoadingLyrics -> 0
+                lyricsText.isNullOrBlank() -> 1
+                else -> 2
+            }
+            Crossfade(
+                targetState = bodyState,
+                animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+                label = "LyricsBodyCrossfade",
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) { state ->
+            when (state) {
+            0 -> {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -659,7 +680,8 @@ fun DesktopLyricsPageView(
                         )
                     }
                 }
-            } else if (lyricsText.isNullOrBlank()) {
+            }
+            1 -> {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -684,7 +706,8 @@ fun DesktopLyricsPageView(
                         )
                     }
                 }
-            } else {
+            }
+            else -> {
                 if (isWideLayout) {
                     // Two-column widescreen layout (Album info kiri, Lirik kanan)
                     Row(
@@ -864,6 +887,8 @@ fun DesktopLyricsPageView(
                         }
                     }
                 }
+            }
+            }
             }
         }
     }

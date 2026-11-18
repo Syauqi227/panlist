@@ -1,9 +1,11 @@
 package com.metrolist.desktop.discord
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -36,41 +38,79 @@ class DiscordIpcClient(
         private const val OP_PONG = 4
     }
 
+    @Volatile
     private var pipe: RandomAccessFile? = null
     private val mutex = Mutex()
+
+    @Volatile
     private var isConnected = false
+
+    @Volatile
     private var isRunning = false
+
+    @Volatile
     private var currentActivity: DiscordActivityPayload? = null
     private var connectionLoopJob: Job? = null
+    private var senderJob: Job? = null
+    private val activitySignal = Channel<Unit>(Channel.CONFLATED)
+
+    internal var pipePathsOverride: List<String>? = null
 
     var onStatusChanged: ((Boolean) -> Unit)? = null
 
     fun start() {
         if (isRunning) return
         isRunning = true
+        startSenderLoop()
         startConnectionLoop()
     }
 
     fun stop() {
         isRunning = false
         connectionLoopJob?.cancel()
-        scope.launch {
-            mutex.withLock {
-                if (isConnected && pipe != null) {
-                    try {
-                        val pid = getPid()
-                        val clearJson = "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":$pid,\"activity\":null},\"nonce\":\"${UUID.randomUUID()}\"}"
-                        writePacketInternal(pipe!!, OP_FRAME, clearJson)
-                        // Tunggu konfirmasi singkat agar Discord selesai menghapus status
-                        waitForData(pipe!!, 200L)
-                        if (pipe!!.length() > 0) {
-                            readPacketInternal(pipe!!)
-                        }
-                    } catch (_: Throwable) {}
-                    closePipeInternal()
-                    notifyStatus(false)
+        senderJob?.cancel()
+        currentActivity = null
+        scope.launch(Dispatchers.IO) {
+            clearAndCloseInternal(onlyIfStopped = true)
+        }
+    }
+
+    fun stopBlocking(timeoutMs: Long = 800L) {
+        isRunning = false
+        connectionLoopJob?.cancel()
+        senderJob?.cancel()
+        currentActivity = null
+        try {
+            runBlocking(Dispatchers.IO) {
+                withTimeoutOrNull(timeoutMs) {
+                    clearAndCloseInternal(onlyIfStopped = false)
                 }
             }
+        } catch (_: Throwable) {
+        } finally {
+            // Pastikan pipe benar-benar tertutup meskipun mutex sempat tertahan
+            closePipeInternal()
+            notifyStatus(false)
+        }
+    }
+
+    private suspend fun clearAndCloseInternal(onlyIfStopped: Boolean = false) {
+        mutex.withLock {
+            if (onlyIfStopped && isRunning) return@withLock
+            val currentPipe = pipe
+            if (isConnected && currentPipe != null) {
+                try {
+                    val clearJson = buildActivityJson(null)
+                    writePacketInternal(currentPipe, OP_FRAME, clearJson)
+                    val hasAck = waitForData(currentPipe, 180L, ignoreRunningState = true)
+                    if (hasAck) {
+                        readPacketInternal(currentPipe)
+                    }
+                    writePacketInternal(currentPipe, OP_CLOSE, "{}")
+                } catch (_: Throwable) {}
+            }
+            closePipeInternal()
+            notifyStatus(false)
         }
     }
 
@@ -87,28 +127,36 @@ class DiscordIpcClient(
 
     fun setActivity(activity: DiscordActivityPayload?) {
         currentActivity = activity
-        if (!isConnected) return
-        scope.launch {
-            sendActivityPayload(activity)
-        }
+        if (!isConnected || !isRunning) return
+        activitySignal.trySend(Unit)
     }
 
     fun clearActivity() {
         currentActivity = null
-        if (!isConnected) return
-        scope.launch {
-            sendActivityPayload(null)
+        if (!isConnected || !isRunning) return
+        activitySignal.trySend(Unit)
+    }
+
+    private fun startSenderLoop() {
+        senderJob?.cancel()
+        senderJob = scope.launch(Dispatchers.IO) {
+            for (signal in activitySignal) {
+                if (!isActive || !isRunning) break
+                if (isConnected) {
+                    sendActivityPayload(currentActivity)
+                }
+            }
         }
     }
 
     private fun startConnectionLoop() {
         connectionLoopJob?.cancel()
-        connectionLoopJob = scope.launch {
+        connectionLoopJob = scope.launch(Dispatchers.IO) {
             while (isActive && isRunning) {
                 if (!isConnected) {
                     val connected = connectPipe()
-                    if (connected) {
-                        currentActivity?.let { sendActivityPayload(it) }
+                    if (connected && isRunning) {
+                        currentActivity?.let { activitySignal.trySend(Unit) }
                     }
                 } else {
                     // Cek keaktifan pipe jika Discord ditutup
@@ -123,8 +171,9 @@ class DiscordIpcClient(
 
     private suspend fun connectPipe(): Boolean = mutex.withLock {
         closePipeInternal()
-        for (i in 0..9) {
-            val pipePath = "\\\\.\\pipe\\discord-ipc-$i"
+        val paths = pipePathsOverride ?: (0..9).map { "\\\\.\\pipe\\discord-ipc-$it" }
+        for (pipePath in paths) {
+            if (!isRunning) return false
             try {
                 val file = RandomAccessFile(pipePath, "rw")
 
@@ -158,7 +207,7 @@ class DiscordIpcClient(
 
     private suspend fun checkConnectionHealth() = mutex.withLock {
         val currentPipe = pipe ?: return@withLock
-        if (!isConnected) return@withLock
+        if (!isConnected || !isRunning) return@withLock
 
         try {
             writePacketInternal(currentPipe, OP_PING, "{}")
@@ -175,7 +224,7 @@ class DiscordIpcClient(
     private suspend fun sendActivityPayload(activity: DiscordActivityPayload?) {
         mutex.withLock {
             val currentPipe = pipe ?: return@withLock
-            if (!isConnected) return@withLock
+            if (!isConnected || !isRunning) return@withLock
 
             try {
                 val payload = buildActivityJson(activity)
@@ -193,9 +242,13 @@ class DiscordIpcClient(
         }
     }
 
-    private fun waitForData(file: RandomAccessFile, timeoutMs: Long): Boolean {
+    private fun waitForData(
+        file: RandomAccessFile,
+        timeoutMs: Long,
+        ignoreRunningState: Boolean = false,
+    ): Boolean {
         val startTime = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
+        while ((ignoreRunningState || isRunning) && System.currentTimeMillis() - startTime < timeoutMs) {
             try {
                 if (file.length() > 0) return true
             } catch (_: Throwable) {
@@ -212,6 +265,9 @@ class DiscordIpcClient(
         val headerBuf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
         val op = headerBuf.int
         val len = headerBuf.int
+        if (len < 0 || len > 1_048_576) {
+            throw IOException("Invalid Discord IPC packet length: $len")
+        }
 
         val body = ByteArray(len)
         raf.readFully(body)
@@ -219,7 +275,7 @@ class DiscordIpcClient(
         return Pair(op, jsonStr)
     }
 
-    private fun buildActivityJson(activity: DiscordActivityPayload?): String {
+    internal fun buildActivityJson(activity: DiscordActivityPayload?): String {
         val pid = getPid()
         val root = buildJsonObject {
             put("cmd", "SET_ACTIVITY")
