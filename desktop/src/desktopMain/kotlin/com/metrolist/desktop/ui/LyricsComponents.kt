@@ -45,6 +45,25 @@ data class LyricEntry(
     val text: String,
 )
 
+internal sealed interface LyricsBodyState {
+    data object Loading : LyricsBodyState
+    data object Empty : LyricsBodyState
+    data class Loaded(
+        val song: DesktopSong,
+        val text: String,
+    ) : LyricsBodyState
+}
+
+internal fun resolveLyricsBodyState(
+    isLoadingLyrics: Boolean,
+    lyricsText: String?,
+    song: DesktopSong,
+): LyricsBodyState = when {
+    isLoadingLyrics -> LyricsBodyState.Loading
+    lyricsText.isNullOrBlank() -> LyricsBodyState.Empty
+    else -> LyricsBodyState.Loaded(song = song, text = lyricsText)
+}
+
 object LrcParser {
     private val LRC_REGEX = Regex("""^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)$""")
     private val AGENT_TAG_REGEX = Regex("""\{agent:[^}]+\}""")
@@ -225,7 +244,8 @@ fun DesktopLyricsDialog(
     }
 
     val hasSyncedLyrics = remember(lyricsText) {
-        !lyricsText.isNullOrBlank() && LrcParser.parse(lyricsText!!).isNotEmpty()
+        val text = lyricsText
+        !text.isNullOrBlank() && LrcParser.parse(text).isNotEmpty()
     }
     var lyricsOffsetMs by remember(song.id) { mutableLongStateOf(0L) }
 
@@ -384,6 +404,7 @@ fun DesktopLyricsDialog(
                     .padding(vertical = 4.dp),
                 contentAlignment = if (isLoadingLyrics || lyricsText.isNullOrBlank()) Alignment.Center else Alignment.TopStart,
             ) {
+                val loadedLyrics = lyricsText
                 if (isLoadingLyrics) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -402,7 +423,7 @@ fun DesktopLyricsDialog(
                             fontSize = 13.sp,
                         )
                     }
-                } else if (lyricsText.isNullOrBlank()) {
+                } else if (loadedLyrics.isNullOrBlank()) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
@@ -425,7 +446,7 @@ fun DesktopLyricsDialog(
                     }
                 } else {
                     SyncedLyricsView(
-                        lyricsText = lyricsText!!,
+                        lyricsText = loadedLyrics,
                         currentPosition = currentPosition,
                         onSeek = { pos -> playbackManager?.seekTo(pos) ?: player.seekTo(pos) },
                         lyricsOffsetMs = lyricsOffsetMs,
@@ -479,7 +500,8 @@ fun DesktopLyricsPageView(
     }
 
     val hasSyncedLyrics = remember(lyricsText) {
-        !lyricsText.isNullOrBlank() && LrcParser.parse(lyricsText!!).isNotEmpty()
+        val text = lyricsText
+        !text.isNullOrBlank() && LrcParser.parse(text).isNotEmpty()
     }
     var lyricsOffsetMs by remember(song.id) { mutableLongStateOf(0L) }
 
@@ -646,11 +668,11 @@ fun DesktopLyricsPageView(
             }
 
             // === 2. BODY CONTENT ===
-            val bodyState = when {
-                isLoadingLyrics -> 0
-                lyricsText.isNullOrBlank() -> 1
-                else -> 2
-            }
+            val bodyState = resolveLyricsBodyState(
+                isLoadingLyrics = isLoadingLyrics,
+                lyricsText = lyricsText,
+                song = song,
+            )
             Crossfade(
                 targetState = bodyState,
                 animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
@@ -658,7 +680,7 @@ fun DesktopLyricsPageView(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) { state ->
             when (state) {
-            0 -> {
+            LyricsBodyState.Loading -> {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -681,7 +703,7 @@ fun DesktopLyricsPageView(
                     }
                 }
             }
-            1 -> {
+            LyricsBodyState.Empty -> {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -707,7 +729,8 @@ fun DesktopLyricsPageView(
                     }
                 }
             }
-            else -> {
+            is LyricsBodyState.Loaded -> {
+                val displaySong = state.song
                 if (isWideLayout) {
                     // Two-column widescreen layout (Album info kiri, Lirik kanan)
                     Row(
@@ -722,10 +745,10 @@ fun DesktopLyricsPageView(
                             verticalArrangement = Arrangement.Top,
                             horizontalAlignment = Alignment.Start,
                         ) {
-                            if (!song.thumbnailUrl.isNullOrBlank()) {
+                            if (!displaySong.thumbnailUrl.isNullOrBlank()) {
                                 AsyncImage(
-                                    model = song.thumbnailUrl,
-                                    contentDescription = song.title,
+                                    model = displaySong.thumbnailUrl,
+                                    contentDescription = displaySong.title,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .size(220.dp)
@@ -754,7 +777,7 @@ fun DesktopLyricsPageView(
                             Spacer(modifier = Modifier.height(16.dp))
 
                             Text(
-                                text = song.title,
+                                text = displaySong.title,
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = DesktopColors.Paper,
@@ -766,7 +789,7 @@ fun DesktopLyricsPageView(
                             Spacer(modifier = Modifier.height(4.dp))
 
                             Text(
-                                text = song.artist,
+                                text = displaySong.artist,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Normal,
                                 color = DesktopColors.Mist,
@@ -774,10 +797,10 @@ fun DesktopLyricsPageView(
                                 overflow = TextOverflow.Ellipsis,
                             )
 
-                            if (!song.album.isNullOrBlank()) {
+                            if (!displaySong.album.isNullOrBlank()) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = song.album,
+                                    text = displaySong.album,
                                     fontSize = 12.sp,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                     color = DesktopColors.Fog,
@@ -786,7 +809,7 @@ fun DesktopLyricsPageView(
                                 )
                             }
 
-                            if (isPlaying) {
+                            if (isPlaying && displaySong.id == song.id) {
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -820,7 +843,7 @@ fun DesktopLyricsPageView(
                                 .fillMaxHeight()
                         ) {
                             SyncedLyricsView(
-                                lyricsText = lyricsText!!,
+                                lyricsText = state.text,
                                 currentPosition = currentPosition,
                                 onSeek = { pos -> playbackManager?.seekTo(pos) ?: player.seekTo(pos) },
                                 lyricsOffsetMs = lyricsOffsetMs,
@@ -840,10 +863,10 @@ fun DesktopLyricsPageView(
                                 .fillMaxWidth()
                                 .padding(bottom = 12.dp)
                         ) {
-                            if (!song.thumbnailUrl.isNullOrBlank()) {
+                            if (!displaySong.thumbnailUrl.isNullOrBlank()) {
                                 AsyncImage(
-                                    model = song.thumbnailUrl,
-                                    contentDescription = song.title,
+                                    model = displaySong.thumbnailUrl,
+                                    contentDescription = displaySong.title,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .size(44.dp)
@@ -854,7 +877,7 @@ fun DesktopLyricsPageView(
                             }
                             Column {
                                 Text(
-                                    text = song.title,
+                                    text = displaySong.title,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = DesktopColors.Paper,
@@ -862,7 +885,7 @@ fun DesktopLyricsPageView(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = song.artist,
+                                    text = displaySong.artist,
                                     fontSize = 12.sp,
                                     color = DesktopColors.Mist,
                                     maxLines = 1,
@@ -877,7 +900,7 @@ fun DesktopLyricsPageView(
                                 .fillMaxWidth()
                         ) {
                             SyncedLyricsView(
-                                lyricsText = lyricsText!!,
+                                lyricsText = state.text,
                                 currentPosition = currentPosition,
                                 onSeek = { pos -> playbackManager?.seekTo(pos) ?: player.seekTo(pos) },
                                 lyricsOffsetMs = lyricsOffsetMs,

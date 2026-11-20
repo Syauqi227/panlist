@@ -102,8 +102,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.window.DefaultWindowExceptionHandlerFactory
 import androidx.compose.ui.window.FrameWindowScope
+import androidx.compose.ui.window.LocalWindowExceptionHandlerFactory
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowExceptionHandler
+import androidx.compose.ui.window.WindowExceptionHandlerFactory
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
@@ -116,6 +120,9 @@ import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
 import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.time.LocalDateTime
 import com.metrolist.desktop.model.*
 import com.metrolist.desktop.player.DesktopPlaybackManager
 import com.metrolist.desktop.player.RepeatMode
@@ -227,6 +234,24 @@ private fun applyDarkAwtTheme(comp: java.awt.Component?, color: java.awt.Color) 
     }
 }
 
+private fun logCrashToFile(throwable: Throwable): File? = runCatching {
+    val logFile = File(System.getProperty("user.home"), ".echo/crash.log")
+    logFile.parentFile?.mkdirs()
+    val sw = StringWriter()
+    throwable.printStackTrace(PrintWriter(sw))
+    logFile.appendText(
+        buildString {
+            append("=== ")
+            append(LocalDateTime.now())
+            append(" ===\n")
+            append(sw.toString())
+            append("\n")
+        }
+    )
+    logFile
+}.getOrNull()
+
+@OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     System.setProperty("sun.awt.noerasebackground", "true")
     if (System.getProperty("os.name")?.contains("Windows", ignoreCase = true) == true) {
@@ -312,22 +337,47 @@ fun main() {
         val appScope = rememberCoroutineScope()
         val isJbrSupported = isJbrWindowDecorationsSupported
 
-        Window(
-            onCloseRequest = onClose,
-            state = windowState,
-            title = "Echo - YouTube Music",
-            icon = painterResource("icons/icon.png"),
-            undecorated = false,
-            resizable = true,
-            onKeyEvent = { keyEvent ->
-                if (keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyUp && playerProgress.value > 0.05f) {
-                    appScope.launch { playerProgress.animateTo(0f, springSpec) }
-                    true
-                } else {
-                    mediaControls.handleKeyEvent(keyEvent)
+        CompositionLocalProvider(
+            LocalWindowExceptionHandlerFactory provides object : WindowExceptionHandlerFactory {
+                override fun exceptionHandler(window: java.awt.Window) = object : WindowExceptionHandler {
+                    override fun onException(throwable: Throwable) {
+                        val logFile = logCrashToFile(throwable)
+                        throwable.printStackTrace(System.err)
+                        val detail = buildString {
+                            append(throwable::class.simpleName ?: "Exception")
+                            val msg = throwable.message
+                            if (!msg.isNullOrBlank()) {
+                                append(": ")
+                                append(msg)
+                            }
+                            if (logFile != null) {
+                                append("\n\nLog detail tersimpan di:\n")
+                                append(logFile.absolutePath)
+                            }
+                        }
+                        DefaultWindowExceptionHandlerFactory
+                            .exceptionHandler(window)
+                            .onException(RuntimeException(detail, throwable))
+                    }
                 }
-            },
+            }
         ) {
+            Window(
+                onCloseRequest = onClose,
+                state = windowState,
+                title = "Echo - YouTube Music",
+                icon = painterResource("icons/icon.png"),
+                undecorated = false,
+                resizable = true,
+                onKeyEvent = { keyEvent ->
+                    if (keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyUp && playerProgress.value > 0.05f) {
+                        appScope.launch { playerProgress.animateTo(0f, springSpec) }
+                        true
+                    } else {
+                        mediaControls.handleKeyEvent(keyEvent)
+                    }
+                },
+            ) {
             LaunchedEffect(windowState.isMinimized) {
                 DesktopMemoryManager.onWindowStateChanged(windowState.isMinimized)
             }
@@ -424,6 +474,7 @@ fun main() {
                 )
             }
         }
+    }
     }
 }
 exitProcess(0)
@@ -2881,10 +2932,10 @@ fun BottomPlayerBar(
                     }
 
                     // Ikon Checkmark / Tambah ke Playlist
-                    if (currentSong != null) {
+                    currentSong?.let { song ->
                         PlayerTooltip(text = "Simpan ke Playlist") {
                             IconButton(
-                                onClick = { onAddToPlaylist?.invoke(currentSong!!) },
+                                onClick = { onAddToPlaylist?.invoke(song) },
                                 modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand),
                             ) {
                                 Icon(
@@ -3097,8 +3148,9 @@ fun BottomPlayerBar(
                     // Connect to a device (Hubungkan ke Perangkat / Cast - Spotify Style)
                     val isRemoteSelected = isCastConnected || selectedDeviceId != "local_pc"
                     val isConnectActive = isRemoteSelected || isConnectFlyoutOpen
-                    val castTooltipText = if (isCastConnected && connectedCastDevice != null) {
-                        "Terhubung ke ${connectedCastDevice!!.name}"
+                    val castDevice = connectedCastDevice
+                    val castTooltipText = if (isCastConnected && castDevice != null) {
+                        "Terhubung ke ${castDevice.name}"
                     } else if (isRemoteSelected) {
                         "Terhubung ke perangkat eksternal"
                     } else {

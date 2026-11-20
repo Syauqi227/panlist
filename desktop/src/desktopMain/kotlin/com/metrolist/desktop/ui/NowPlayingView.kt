@@ -77,13 +77,14 @@ fun NowPlayingView(
     }
 
     // Modal Dialog Kredit Lengkap
-    if (showCreditsDialog && currentSong != null) {
-        val credits = remember(currentSong) { repository.generateCredits(currentSong!!) }
+    val creditsSong = currentSong
+    if (showCreditsDialog && creditsSong != null) {
+        val credits = remember(creditsSong) { repository.generateCredits(creditsSong) }
         AlertDialog(
             onDismissRequest = { showCreditsDialog = false },
             title = {
                 Text(
-                    text = "Kredit Lagu: ${currentSong!!.title}",
+                    text = "Kredit Lagu: ${creditsSong.title}",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 17.sp,
                     color = DesktopColors.Paper
@@ -130,13 +131,14 @@ fun NowPlayingView(
     }
 
     // Modal Dialog Jadwal Tur Lengkap
-    if (showTourDialog && currentSong != null) {
-        val tours = remember(currentSong) { repository.generateTourDates(currentSong!!.artist) }
+    val tourSong = currentSong
+    if (showTourDialog && tourSong != null) {
+        val tours = remember(tourSong) { repository.generateTourDates(tourSong.artist) }
         AlertDialog(
             onDismissRequest = { showTourDialog = false },
             title = {
                 Text(
-                    text = "Jadwal Tur & Konser: ${currentSong!!.artist}",
+                    text = "Jadwal Tur & Konser: ${tourSong.artist}",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 17.sp,
                     color = DesktopColors.Paper
@@ -165,12 +167,13 @@ fun NowPlayingView(
     }
 
     // Modal Dialog Lirik Lagu
-    if (showLyricsDialog && currentSong != null) {
+    val lyricsSong = currentSong
+    if (showLyricsDialog && lyricsSong != null) {
         val currentPosition by playbackManager.player.currentPosition.collectAsState()
-        LaunchedEffect(currentSong?.id) {
+        LaunchedEffect(lyricsSong.id) {
             if (lyricsText == null && !isLoadingLyrics) {
                 isLoadingLyrics = true
-                lyricsText = repository.getSongLyrics(currentSong!!)
+                lyricsText = repository.getSongLyrics(lyricsSong)
                 isLoadingLyrics = false
             }
         }
@@ -179,7 +182,8 @@ fun NowPlayingView(
             onDismissRequest = { showLyricsDialog = false },
             title = {
                 val hasSyncedLyrics = remember(lyricsText) {
-                    !lyricsText.isNullOrBlank() && LrcParser.parse(lyricsText!!).isNotEmpty()
+                    val text = lyricsText
+                    !text.isNullOrBlank() && LrcParser.parse(text).isNotEmpty()
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -193,7 +197,7 @@ fun NowPlayingView(
                         Icon(Icons.Default.Mic, contentDescription = null, tint = DesktopColors.AcidLime, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Lirik Lagu — ${currentSong!!.title}",
+                            text = "Lirik Lagu — ${lyricsSong.title}",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 16.sp,
                             color = DesktopColors.Paper,
@@ -240,11 +244,12 @@ fun NowPlayingView(
                         .fillMaxWidth()
                         .heightIn(min = 260.dp, max = 480.dp)
                 ) {
+                    val loadedLyrics = lyricsText
                     if (isLoadingLyrics) {
                         Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = DesktopColors.AcidLime)
                         }
-                    } else if (lyricsText.isNullOrBlank()) {
+                    } else if (loadedLyrics.isNullOrBlank()) {
                         Text(
                             text = "Lirik untuk lagu ini belum tersedia dari penyedia musik.",
                             color = DesktopColors.Fog,
@@ -253,7 +258,7 @@ fun NowPlayingView(
                         )
                     } else {
                         SyncedLyricsView(
-                            lyricsText = lyricsText!!,
+                            lyricsText = loadedLyrics,
                             currentPosition = currentPosition,
                             onSeek = { playbackManager.seekTo(it) },
                             modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 460.dp),
@@ -329,10 +334,11 @@ fun NowPlayingView(
                                 onOpenLyrics()
                             } else {
                                 showLyricsDialog = true
-                                if (lyricsText == null && !isLoadingLyrics && currentSong != null) {
+                                val song = currentSong
+                                if (lyricsText == null && !isLoadingLyrics && song != null) {
                                     scope.launch {
                                         isLoadingLyrics = true
-                                        lyricsText = repository.getSongLyrics(currentSong!!)
+                                        lyricsText = repository.getSongLyrics(song)
                                         isLoadingLyrics = false
                                     }
                                 }
@@ -348,9 +354,9 @@ fun NowPlayingView(
                         )
                     }
 
-                    if (currentSong != null) {
+                    currentSong?.let { song ->
                         IconButton(
-                            onClick = { onAddToPlaylist(currentSong!!) },
+                            onClick = { onAddToPlaylist(song) },
                             modifier = Modifier.size(36.dp).pointerHoverIcon(PointerIcon.Hand),
                         ) {
                             Icon(
